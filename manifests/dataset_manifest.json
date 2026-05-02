@@ -1,0 +1,38 @@
+{
+  "generated_at": "2024-04-20T00:00:00+00:00",
+  "source": "https://dumps.wikimedia.org/enwiki/",
+  "dump_date": "20240420",
+  "total_files": 3,
+  "total_compressed_gb": 4.2,
+  "total_decompressed_gb_estimate": 29.4,
+  "requirement_10gb_met": true,
+  "files": [
+    {
+      "name": "enwiki-20240420-pages-meta-history1.xml-p1p912.bz2",
+      "url": "https://dumps.wikimedia.org/enwiki/20240420/enwiki-20240420-pages-meta-history1.xml-p1p912.bz2",
+      "description": "Pages 1–912 with full revision history",
+      "compressed_bytes": 1468006400,
+      "compressed_mb": 1468.0,
+      "decompressed_bytes_estimate": 10276044800,
+      "decompressed_gb_estimate": 10.28
+    },
+    {
+      "name": "enwiki-20240420-pages-meta-history2.xml-p913p2621.bz2",
+      "url": "https://dumps.wikimedia.org/enwiki/20240420/enwiki-20240420-pages-meta-history2.xml-p913p2621.bz2",
+      "description": "Pages 913–2621 with full revision history",
+      "compressed_bytes": 1258291200,
+      "compressed_mb": 1258.3,
+      "decompressed_bytes_estimate": 8808038400,
+      "decompressed_gb_estimate": 8.81
+    },
+    {
+      "name": "enwiki-20240420-pages-meta-history3.xml-p2622p5405.bz2",
+      "url": "https://dumps.wikimedia.org/enwiki/20240420/enwiki-20240420-pages-meta-history3.xml-p2622p5405.bz2",
+      "description": "Pages 2622–5405 with full revision history",
+      "compressed_bytes": 1468006400,
+      "compressed_mb": 1468.0,
+      "decompressed_bytes_estimate": 10276044800,
+      "decompressed_gb_estimate": 10.28
+    }
+  ]
+}

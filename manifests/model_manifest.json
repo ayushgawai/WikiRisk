@@ -1,0 +1,21 @@
+{
+  "run_id": "placeholder_run_id",
+  "model_name": "wikirisk-risk-classifier",
+  "trained_at": "2024-04-20T00:00:00+00:00",
+  "mlflow_tracking_uri": "http://localhost:5001",
+  "note": "This file is updated automatically after each training run (make train)",
+  "metrics": {
+    "auc": 0.0,
+    "pr_auc": 0.0,
+    "f1": 0.0,
+    "precision": 0.0,
+    "recall": 0.0,
+    "accuracy": 0.0
+  },
+  "training_data_stats": {
+    "total": 0,
+    "positive": 0,
+    "negative": 0,
+    "positive_rate": 0.0
+  }
+}
