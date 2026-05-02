@@ -116,27 +116,46 @@ def log_confusion_matrix(
 
 def load_production_model(cfg=None):
     """
-    Load the latest 'Production' stage model from MLflow Model Registry.
-    Falls back to 'Staging' if no Production model exists.
+    Load the trained SparkML model.
+
+    Priority order:
+      1. Local path saved by train_full_pipeline.py  (data/model/wikirisk_lr_model)
+      2. MLflow Model Registry (Production → Staging → None stages)
+
+    This means the model works even when MLflow server is not running.
     """
-    import mlflow.spark
+    from pyspark.ml import PipelineModel
+    from pathlib import Path
 
     if cfg is None:
         from src.config import get_settings
         cfg = get_settings()
 
+    # ── 1. Local model saved by full training pipeline ─────────────────────
+    root = Path(__file__).resolve().parent.parent.parent
+    local_path = root / "data" / "model" / "wikirisk_lr_model"
+    if local_path.exists():
+        try:
+            model = PipelineModel.load(str(local_path))
+            log.info("model_loaded_local", path=str(local_path))
+            return model
+        except Exception as exc:
+            log.warning("local_model_load_failed", path=str(local_path), error=str(exc))
+
+    # ── 2. MLflow Model Registry ───────────────────────────────────────────
+    import mlflow.spark
     mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
 
     for stage in ("Production", "Staging", "None"):
         model_uri = f"models:/{cfg.mlflow_model_name}/{stage}"
         try:
             model = mlflow.spark.load_model(model_uri)
-            log.info("model_loaded", uri=model_uri, stage=stage)
+            log.info("model_loaded_mlflow", uri=model_uri, stage=stage)
             return model
         except Exception as exc:
             log.debug("model_load_attempt_failed", stage=stage, error=str(exc))
 
     raise RuntimeError(
-        f"No trained model found in registry: {cfg.mlflow_model_name}. "
-        "Run 'make train' first."
+        f"No trained model found locally ({local_path}) or in MLflow registry "
+        f"({cfg.mlflow_model_name}). Run scripts/train_full_pipeline.py first."
     )

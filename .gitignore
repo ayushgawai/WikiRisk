@@ -3,8 +3,9 @@
 *.pem
 *.key
 
-# ── Data (large files – track manifests, not raw data) ────────────────────────
+# ── Data (large files – track manifests and model, not raw dumps) ─────────────
 data/raw/dumps/
+data/raw/mediawiki_history/*.bz2
 data/processed/
 data/stream/
 data/predictions/
@@ -13,9 +14,8 @@ data/wikirisk.db
 *.db-shm
 *.db-wal
 
-# ── MLflow local runs ─────────────────────────────────────────────────────────
-mlruns/
-mlartifacts/
+# mlruns/ and data/model/ are intentionally tracked:
+# they contain training proof and the trained model for sharing.
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
@@ -56,4 +56,4 @@ spark-warehouse/
 
 # ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
-*.ipynb
+# *.ipynb intentionally tracked — notebooks are part of the project

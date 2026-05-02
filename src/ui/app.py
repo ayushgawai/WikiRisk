@@ -93,7 +93,8 @@ def api_explain(edit_id: str) -> Optional[str]:
         return f"Could not generate explanation: {exc}"
 
 
-def _badge(label: Optional[str]) -> str:
+def _badge_html(label: Optional[str]) -> str:
+    """HTML badge — only for use inside st.markdown(unsafe_allow_html=True)."""
     if not label:
         return '<span class="badge-na">UNSCORED</span>'
     cls = {"HIGH": "badge-high", "MEDIUM": "badge-medium", "LOW": "badge-low"}.get(
@@ -102,14 +103,119 @@ def _badge(label: Optional[str]) -> str:
     return f'<span class="{cls}">{label.upper()}</span>'
 
 
+def _risk_prefix(label: Optional[str]) -> str:
+    """Plain-text risk prefix for expander titles (no HTML — Streamlit strips it)."""
+    return {"HIGH": "🔴 High risk", "MEDIUM": "🟡 Medium risk", "LOW": "🟢 Low risk"}.get(
+        (label or "").upper(), "⚪ Unscored"
+    )
+
+
+def _fmt_size(delta: int) -> str:
+    """Human-readable byte delta: '+53 bytes', '−1.4 KB', '+2.3 MB'."""
+    sign = "+" if delta >= 0 else "−"
+    n = abs(delta)
+    if n < 1_000:
+        return f"{sign}{n} byte{'s' if n != 1 else ''}"
+    if n < 1_000_000:
+        return f"{sign}{n/1000:.1f} KB"
+    return f"{sign}{n/1_000_000:.1f} MB"
+
+
+def _time_ago(ts_str: str) -> str:
+    """Convert ISO timestamp to 'X minutes ago', '3h ago', 'yesterday', etc."""
+    from datetime import datetime, timezone, timedelta
+    try:
+        # Handle both +00:00 and Z suffixes
+        ts_str = ts_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(ts_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        now = datetime.now(tz=timezone.utc)
+        diff = now - dt
+        secs = int(diff.total_seconds())
+        if secs < 30:
+            return "just now"
+        if secs < 60:
+            return f"{secs}s ago"
+        mins = secs // 60
+        if mins < 60:
+            return f"{mins}m ago"
+        hours = mins // 60
+        if hours < 24:
+            return f"{hours}h ago"
+        days = hours // 24
+        if days == 1:
+            return "yesterday"
+        if days < 7:
+            return f"{days} days ago"
+        if days < 30:
+            weeks = days // 7
+            return f"{weeks}w ago"
+        if days < 365:
+            months = days // 30
+            return f"{months}mo ago"
+        years = days // 365
+        return f"{years}y ago"
+    except Exception:
+        return ts_str[:10] if ts_str else ""
+
+
 def _score_color(score: Optional[float]) -> str:
     if score is None:
         return "#94a3b8"
-    if score >= 0.7:
+    if score >= 0.68:
         return "#dc2626"
-    if score >= 0.4:
+    if score >= 0.30:
         return "#d97706"
     return "#16a34a"
+
+
+def _clean_comment(raw: str) -> str:
+    """Strip Wikipedia wikitext markup from edit comments into plain English."""
+    import re as _re
+    c = raw or ""
+
+    # /* Section title */ → "in 'Section':"  (only keep if more text follows)
+    c = _re.sub(
+        r"/\*\s*(.*?)\s*\*/\s*",
+        lambda m: (f"in '{m.group(1).strip()}': " if m.group(1).strip() else ""),
+        c,
+    )
+
+    # [[Special:Diff/123|123]] → just the number (word "revision" already present)
+    c = _re.sub(r"\[\[Special:Diff/\d+\|(\d+)\]\]", r"\1", c)
+
+    # ([[User talk:Name|talk]]) and (talk) → removed
+    c = _re.sub(r"\s*\(\[\[User talk:[^\]]+\|talk\]\]\)", "", c)
+    c = _re.sub(r"\s*\(talk\)", "", c)
+
+    # [[Special:Contributions/Name|Name]] → removed entirely
+    c = _re.sub(r"\[\[Special:Contributions/[^\]]+\|[^\]]+\]\]", "", c)
+
+    # [[WP:Shortcut|text]] and similar → just the display text
+    c = _re.sub(r"\[\[[^\]]+\|([^\]]+)\]\]", r"\1", c)
+
+    # [[Article]] → Article
+    c = _re.sub(r"\[\[([^\]]+)\]\]", r"\1", c)
+
+    # " by  <text>" where the username was stripped → remove the orphan "by"
+    c = _re.sub(r"\s+by\s{2,}", " — ", c)
+    # Trailing "by" with nothing after it
+    c = _re.sub(r"\s+by\s*[,.]?\s*$", "", c)
+
+    # Trailing lonely colon from section-only comments
+    c = c.strip().rstrip(":")
+
+    # Collapse multiple spaces / punctuation
+    c = _re.sub(r" {2,}", " ", c).strip()
+
+    # Boilerplate-only → friendly phrase
+    if _re.fullmatch(r"(Undid|Reverted|Restored)\s+(revision\s+)?\d+\.?", c, _re.I):
+        c = "Reverted a previous edit"
+    if c.startswith("in '") and c.endswith("':"):
+        c = c[4:-2]   # was a section-only comment like /* Plot */ → "Plot"
+
+    return c or "(no comment)"
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -136,16 +242,22 @@ with st.sidebar:
     st.markdown("[Wikimedia EventStreams](https://stream.wikimedia.org)")
 
 # ── Main header ───────────────────────────────────────────────────────────────
+from datetime import datetime, timezone as _tz
+
+_refreshed_at = datetime.now(tz=_tz.utc).strftime("%H:%M:%S UTC")
+
 col_title, col_refresh = st.columns([4, 1])
 with col_title:
     st.markdown("## Wikipedia Edit Risk Monitor")
     st.caption(
-        "Live risk scoring of English Wikipedia edits · "
-        f"Powered by SparkML + MLflow"
+        f"Live risk scoring of English Wikipedia edits · "
+        f"Powered by SparkML + MLflow · "
+        f"Last refreshed at **{_refreshed_at}**"
     )
 with col_refresh:
-    if st.button("↺ Refresh", use_container_width=True):
+    if st.button("↺ Refresh now", width="stretch"):
         st.cache_data.clear()
+        st.rerun()
 
 # ── KPI row ───────────────────────────────────────────────────────────────────
 stats = api_get("/stats") or {}
@@ -169,11 +281,12 @@ def _kpi(col, value, label, color=None):
             unsafe_allow_html=True,
         )
 
-_kpi(k1, f"{total:,}", "Total Edits")
-_kpi(k2, f"{high:,}", "High Risk", "#dc2626")
-_kpi(k3, f"{medium:,}", "Medium Risk", "#d97706")
-_kpi(k4, f"{low:,}", "Low Risk", "#16a34a")
-_kpi(k5, f"{avg_score:.2%}", "Avg Risk Score")
+_kpi(k1, f"{total:,}", "Edits monitored")
+_kpi(k2, f"{high:,}", "High risk", "#dc2626")
+_kpi(k3, f"{medium:,}", "Medium risk", "#d97706")
+_kpi(k4, f"{low:,}", "Low risk", "#16a34a")
+avg_label = f"{round(avg_score * 100)}/100"
+_kpi(k5, avg_label, "Avg risk score")
 
 st.divider()
 
@@ -207,7 +320,7 @@ with chart_col:
                 )
             ],
         )
-        st.plotly_chart(fig, use_container_width=True, key="pie_chart")
+        st.plotly_chart(fig, width="stretch", key="pie_chart")
 
 # ── Edit feed ─────────────────────────────────────────────────────────────────
 st.markdown("### Live Edit Feed")
@@ -231,32 +344,61 @@ if not items:
 
 # ── Table ─────────────────────────────────────────────────────────────────────
 for edit in items:
-    score = edit.get("risk_score")
-    label = edit.get("risk_label")
-    title = edit.get("page_title", "Unknown")
-    user = edit.get("user", "—")
-    comment = edit.get("comment", "") or "—"
-    delta = int(edit.get("length_delta") or 0)
-    ts = edit.get("created_at", "")[:16].replace("T", " ")
-    edit_id = edit.get("id", "")
+    score    = edit.get("risk_score")
+    label    = edit.get("risk_label")
+    title    = edit.get("page_title", "Unknown")
+    user     = edit.get("user", "—")
+    raw_comment = edit.get("comment", "") or ""
+    comment  = _clean_comment(raw_comment)
+    delta    = int(edit.get("length_delta") or 0)
+    ts_raw   = edit.get("created_at") or edit.get("timestamp") or ""
+    edit_id  = edit.get("id", "")
 
-    score_str = f"{score:.2%}" if score is not None else "—"
-    delta_str = (f"+{delta}" if delta >= 0 else str(delta)) + " B"
+    size_str  = _fmt_size(delta)
+    time_str  = _time_ago(ts_raw)
+    risk_text = _risk_prefix(label)
 
-    with st.expander(
-        f"{_badge(label)} &nbsp; **{title}** &nbsp; · &nbsp; "
-        f"`{score_str}` &nbsp; {delta_str} &nbsp; · &nbsp; _{ts}_",
-        expanded=False,
-    ):
+    # Plain-text expander title (no HTML — Streamlit strips it)
+    expander_title = f"{risk_text}  ·  {title}  ·  {size_str}  ·  {time_str}"
+
+    with st.expander(expander_title, expanded=False):
         col_l, col_r = st.columns([3, 1])
 
         with col_l:
-            st.markdown(f"**User:** `{user}` {'_(anon)_' if edit.get('is_anon') else ''}")
-            st.markdown(f"**Comment:** {comment[:300] or '—'}")
-            rev_id = edit.get("rev_id", "")
-            if rev_id:
+            # Styled risk badge inside the body (HTML works here)
+            st.markdown(_badge_html(label), unsafe_allow_html=True)
+            st.markdown("")
+
+            # User line — show display-friendly name, not raw IP
+            is_anon = edit.get("is_anon")
+            user_display = "Anonymous editor" if is_anon else user
+            st.markdown(f"**Editor:** {user_display}")
+
+            # Clean, human-readable comment
+            st.markdown(f"**Edit summary:** {comment}")
+
+            # Size change
+            st.markdown(f"**Size change:** {size_str}")
+
+            # Risk score as a readable sentence, not a raw number
+            if score is not None:
+                score_pct = round(score * 100)
+                score_desc = (
+                    "very likely suspicious" if score >= 0.85 else
+                    "likely suspicious" if score >= 0.68 else
+                    "possibly suspicious" if score >= 0.30 else
+                    "probably fine"
+                )
+                st.markdown(f"**Risk score:** {score_pct} out of 100 — *{score_desc}*")
+
+            # Wikipedia links — only show diff when we have a verified rev_id
+            rev_id = str(edit.get("rev_id") or "").strip()
+            page_url = f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+            if rev_id and rev_id.isdigit() and int(rev_id) > 1_000_000:
                 diff_url = f"https://en.wikipedia.org/w/index.php?diff={rev_id}"
-                st.markdown(f"[View diff on Wikipedia ↗]({diff_url})")
+                st.markdown(f"[View this change on Wikipedia ↗]({diff_url})  ·  [Article page]({page_url})")
+            else:
+                st.markdown(f"[View article on Wikipedia ↗]({page_url})")
 
         with col_r:
             if score is not None:
@@ -288,14 +430,14 @@ for edit in items:
                     paper_bgcolor="rgba(0,0,0,0)",
                     font=dict(size=11),
                 )
-                st.plotly_chart(gauge, use_container_width=True, key=f"gauge_{edit_id}")
+                st.plotly_chart(gauge, width="stretch", key=f"gauge_{edit_id}")
 
         # ── AI explanation ─────────────────────────────────────────────────
         st.markdown("---")
         if st.button(
             "✦ Explain with AI",
             key=f"explain_{edit_id}",
-            use_container_width=False,
+            width="content",
         ):
             with st.spinner("Generating explanation…"):
                 text = api_explain(edit_id)

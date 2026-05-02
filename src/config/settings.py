@@ -91,8 +91,8 @@ class Settings(BaseSettings):
     log_format: str = "json"  # "json" | "pretty"
 
     # ── Risk Thresholds ────────────────────────────────────────────────────
-    risk_high_threshold: float = 0.7
-    risk_medium_threshold: float = 0.4
+    risk_high_threshold: float = 0.68
+    risk_medium_threshold: float = 0.30
 
     @field_validator("data_dir", "raw_data_dir", "processed_data_dir",
                      "predictions_dir", "stream_input_dir",
