@@ -7,7 +7,6 @@ produces a confusion matrix artefact for MLflow logging.
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -104,10 +103,13 @@ def log_confusion_matrix(
             "fn": fn,
         }
 
-        tmp = tempfile.mktemp(suffix=".json", prefix="confusion_matrix_")
-        Path(tmp).write_text(json.dumps(output, indent=2))
-        log.info("confusion_matrix_saved", tp=tp, fp=fp, tn=tn, fn=fn)
-        return tmp
+        root = Path(__file__).resolve().parents[2]
+        out_dir = root / "data" / "predictions"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"confusion_matrix_{run_id}.json"
+        out_path.write_text(json.dumps(output, indent=2))
+        log.info("confusion_matrix_saved", tp=tp, fp=fp, tn=tn, fn=fn, path=str(out_path))
+        return str(out_path)
 
     except Exception as exc:
         log.warning("confusion_matrix_failed", error=str(exc))

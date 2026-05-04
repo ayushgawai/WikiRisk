@@ -3,37 +3,52 @@ smoke_test_notebook.py
 ----------------------
 Replicates every logic path in WikiRisk_Training_Pipeline.ipynb using
 ~2000 synthetic rows so the full pipeline (Spark load → feature engineering
-→ train → evaluate → manifest → re-score DB) finishes in < 3 minutes.
+→ train → evaluate → manifest → re-score DB) finishes in a few minutes.
 
-Synthetic data is written to macOS /var/folders (tempfile) so that the
-Spark JVM can access it — the JVM sandbox on macOS restricts reading
-from /Users/... for small files but works fine with the real large dumps.
+All artifacts stay under the repo (no OS tmp dirs for data):
+  data/raw/mediawiki_history/_smoke_sample.tsv.bz2
+  data/spark-local/          (Spark shuffle — in .gitignore)
+  data/model/wikirisk_lr_smoke/
 
-Run: python scripts/smoke_test_notebook.py
+Run:
+  python scripts/smoke_test_notebook.py --generate-only   # write sample only
+  python scripts/smoke_test_notebook.py                    # full fast test
 """
 
-import bz2, json, os, re, sqlite3, sys, tempfile, time, warnings
+import argparse
+import bz2, json, os, re, sqlite3, sys, time, warnings
 from datetime import datetime, timezone
 from pathlib import Path
 
 warnings.filterwarnings("ignore")
 
-ROOT      = Path(__file__).resolve().parent.parent
-DATA_DIR  = ROOT / "data" / "raw" / "mediawiki_history"
-MODEL_DIR = ROOT / "data" / "model"
-MANIFEST  = ROOT / "manifests" / "model_manifest.json"
-MLFLOW_DIR= ROOT / "mlruns"
-DB_PATH   = ROOT / "data" / "wikirisk_smoke.db"   # separate from prod DB
-# Use tempfile dir so Spark JVM can access it (macOS /var/folders)
-SAMPLE_BZ2= Path(tempfile.mktemp(suffix="_smoke.tsv.bz2"))
-STATS_CACHE = DATA_DIR / "label_stats.json"
-MODEL_PATH  = str(MODEL_DIR / "wikirisk_lr_model")
+ROOT         = Path(__file__).resolve().parent.parent
+DATA_DIR     = ROOT / "data" / "raw" / "mediawiki_history"
+MODEL_DIR    = ROOT / "data" / "model"
+MLFLOW_DIR   = ROOT / "mlruns"
+DB_PATH      = ROOT / "data" / "wikirisk_smoke.db"  # separate from prod DB
+SAMPLE_BZ2   = DATA_DIR / "_smoke_sample.tsv.bz2"    # in-repo; notebook USE_SMOKE_DEMO reads this
+SPARK_LOCAL  = ROOT / "data" / "spark-local"
+STATS_SMOKE  = DATA_DIR / "label_stats_smoke.json"
+SIZES_SMOKE  = DATA_DIR / "sizes_smoke.json"
 
-for d in [DATA_DIR, MODEL_DIR, ROOT/"manifests", MLFLOW_DIR, ROOT/"docs"]:
+for d in [DATA_DIR, MODEL_DIR, ROOT/"manifests", MLFLOW_DIR, ROOT/"docs", SPARK_LOCAL]:
     d.mkdir(parents=True, exist_ok=True)
 
 PASS = "✅"; FAIL = "❌"; INFO = "ℹ️ "
 errors = []
+# Module-level — nested helpers use `global` so Spark state is not shadowed by _run_smoke_pipeline locals
+spark = None
+raw = None
+labeled = None
+label_stats = None
+train_df = test_df = None
+n_train = n_test = 0
+cv = evaluator = None
+best_model = None
+RUN_ID = None
+elapsed = 0.0
+metrics: dict = {}
 
 def check(label, fn):
     try:
@@ -45,7 +60,6 @@ def check(label, fn):
         errors.append((label, e))
 
 # ── 1. Generate synthetic sample bz2 TSV ──────────────────────────────────────
-print("\n[1] Generating synthetic bz2 sample data (500 rows)…")
 
 MW_HEADER = [
     "wiki_db","event_entity","event_type","event_timestamp",
@@ -142,385 +156,395 @@ def make_row(i):
     }
     return "\t".join(row_vals[c] for c in MW_HEADER)
 
-def gen_sample():
-    # NO header row — real Wikimedia dumps have no TSV header (schema applied externally)
-    # 2000 rows for a statistically stable split; placed in /var/folders via tempfile
+def gen_sample(*, force: bool = False) -> None:
+    """Write synthetic bz2 TSV under data/raw/mediawiki_history/ (no tmp)."""
+    if not force and SAMPLE_BZ2.exists() and SAMPLE_BZ2.stat().st_size > 500:
+        print(f"         Reusing existing {SAMPLE_BZ2.name} ({SAMPLE_BZ2.stat().st_size:,} bytes)")
+        return
     lines = []
     for i in range(2000):
         lines.append(make_row(i))
     data = ("\n".join(lines) + "\n").encode()
     with bz2.open(SAMPLE_BZ2, "wb") as fh:
         fh.write(data)
-    print(f"         Synthetic file: {SAMPLE_BZ2}  ({SAMPLE_BZ2.stat().st_size:,} bytes compressed)")
+    print(f"         Wrote {SAMPLE_BZ2}  ({SAMPLE_BZ2.stat().st_size:,} bytes compressed)")
 
-check("Generate synthetic bz2 TSV (500 rows)", gen_sample)
 
-# ── 2. Spark session ──────────────────────────────────────────────────────────
-print("\n[2] Starting SparkSession…")
-from pyspark.sql import SparkSession
-spark = None
+def main() -> None:
+    p = argparse.ArgumentParser(description="WikiRisk smoke test (in-repo paths only)")
+    p.add_argument("--generate-only", action="store_true", help="Write _smoke_sample.tsv.bz2 and exit")
+    opts, _ = p.parse_known_args()
+    if opts.generate_only:
+        gen_sample(force=True)
+        print("\nWrote:", SAMPLE_BZ2.resolve())
+        print("In the notebook, set USE_SMOKE_DEMO = True in cell 2, then run cells step by step.")
+        return
 
-def start_spark():
-    global spark
-    spark = (
-        SparkSession.builder
-        .master("local[2]")
-        .appName("WikiRisk-SmokeTest")
-        .config("spark.driver.memory",          "2g")
-        .config("spark.executor.memory",        "2g")
-        .config("spark.sql.shuffle.partitions", "4")
-        .config("spark.ui.enabled",             "false")
-        .config("spark.sql.adaptive.enabled",   "true")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("ERROR")
+    _run_smoke_pipeline()
 
-check("SparkSession start", start_spark)
 
-# ── 3. Load raw TSV ────────────────────────────────────────────────────────────
-print("\n[3] Load raw bz2 TSV with Spark…")
-from pyspark.sql.types import StructType, StructField, StringType
+def _run_smoke_pipeline() -> None:
+    print("\n[1] Synthetic bz2 sample (in-repo, reused if present)…")
+    check("Generate / reuse _smoke_sample.tsv.bz2", lambda: gen_sample(force=False))
 
-schema = StructType([StructField(c, StringType(), True) for c in MW_HEADER])
-raw = None
+    # ── 2. Spark session ──────────────────────────────────────────────────────────
+    print("\n[2] Starting SparkSession…")
+    from pyspark.sql import SparkSession
 
-def load_raw():
-    global raw
-    raw = (
-        spark.read
-        .option("sep", "\t").option("header", "false")
-        .option("quote", "").option("comment", "#")
-        .schema(schema)
-        .csv(str(SAMPLE_BZ2))
-    )
-    raw.cache()
-    n = raw.count()
-    assert n > 0, f"Expected >0 rows, got {n}"
+    def start_spark():
+        global spark
+        spark = (
+            SparkSession.builder
+            .master("local[2]")
+            .appName("WikiRisk-SmokeTest")
+            .config("spark.local.dir",              str(SPARK_LOCAL))
+            .config("spark.driver.memory",          "2g")
+            .config("spark.executor.memory",        "2g")
+            .config("spark.sql.shuffle.partitions", "4")
+            .config("spark.ui.enabled",             "false")
+            .config("spark.sql.adaptive.enabled",   "true")
+            .getOrCreate()
+        )
+        spark.sparkContext.setLogLevel("ERROR")
 
-check(f"Load bz2 TSV → {500} rows", load_raw)
+    check("SparkSession start", start_spark)
 
-# ── 4. Feature engineering + label stats ──────────────────────────────────────
-print("\n[4] Feature engineering…")
-from pyspark.sql import functions as F
+    # ── 3. Load raw TSV ────────────────────────────────────────────────────────────
+    print("\n[3] Load raw bz2 TSV with Spark…")
+    from pyspark.sql.types import StructType, StructField, StringType
 
-labeled = None
-label_stats = None
+    schema = StructType([StructField(c, StringType(), True) for c in MW_HEADER])
 
-def feature_eng():
-    global labeled, label_stats
-    labeled = (
-        raw
-        .filter(F.col("event_entity") == "revision")
-        .filter(F.col("event_type")   == "create")
-        .filter(F.col("page_namespace") == "0")
-        .filter(F.col("revision_is_identity_reverted").isNotNull())
-        .withColumn("label",
-            (F.col("revision_is_identity_reverted") == "true").cast("int"))
-        .withColumn("length_delta",
-            F.coalesce(F.col("revision_text_bytes_diff").cast("double"), F.lit(0.0)))
-        .withColumn("is_anon_int",
-            (F.col("event_user_is_anonymous") == "true").cast("int"))
-        .withColumn("event_ts",
-            F.to_timestamp("event_timestamp", "yyyy-MM-dd HH:mm:ss.S"))
-        .withColumn("hour_of_day", F.hour("event_ts"))
-        .withColumn("day_of_week", F.dayofweek("event_ts"))
-        .withColumn("comment_clean",
-            F.lower(F.regexp_replace(
-                F.coalesce(F.col("event_comment"), F.lit("")), r"[^a-zA-Z0-9\s]", " ")))
-        .withColumn("title_clean",
-            F.lower(F.regexp_replace(
-                F.coalesce(F.col("page_title_historical"), F.lit("")), r"[^a-zA-Z0-9\s]", " ")))
-        .select("revision_id","page_title_historical","label",
-                "length_delta","is_anon_int","hour_of_day","day_of_week",
-                "comment_clean","title_clean")
-        .na.fill({"length_delta":0.0,"is_anon_int":0,"hour_of_day":0,
-                  "day_of_week":1,"comment_clean":"","title_clean":""})
-    )
-    labeled.cache()
-    total = labeled.count()
-    pos   = labeled.filter(F.col("label") == 1).count()
-    neg   = total - pos
-    rate  = pos / total
-    assert total > 0
-    label_stats = {"total":total,"positive":pos,"negative":neg,
-                   "positive_rate":round(rate,4),"n_train":0,"n_test":0}
-    print(f"         {total} labeled rows  ({100*rate:.1f}% reverted)")
+    def load_raw():
+        global raw
+        # Spark CSV + tiny local bz2 is unreliable on some macOS JVM setups; parse in Python then createDataFrame.
+        rows: list[list[str]] = []
+        with bz2.open(SAMPLE_BZ2, "rt", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) == len(MW_HEADER):
+                    rows.append(parts)
+        raw = spark.createDataFrame(rows, schema=schema)
+        raw.cache()
+        n = raw.count()
+        assert n > 0, f"Expected >0 rows, got {n}"
 
-check("Feature engineering + label stats", feature_eng)
+    check("Load bz2 TSV (2000 rows)", load_raw)
 
-# ── 5. Train / test split ──────────────────────────────────────────────────────
-print("\n[5] Train/test split…")
-train_df = test_df = n_train = n_test = None
+    # ── 4. Feature engineering + label stats ──────────────────────────────────────
+    print("\n[4] Feature engineering…")
+    from pyspark.sql import functions as F
 
-def split():
-    global train_df, test_df, n_train, n_test
-    train_df, test_df = labeled.randomSplit([0.8, 0.2], seed=42)
-    train_df.cache(); test_df.cache()
-    n_train = train_df.count(); n_test = test_df.count()
-    label_stats.update({"n_train":n_train,"n_test":n_test})
-    assert n_train > 0 and n_test > 0
+    def feature_eng():
+        global labeled, label_stats
+        labeled = (
+            raw
+            .filter(F.col("event_entity") == "revision")
+            .filter(F.col("event_type")   == "create")
+            .filter(F.col("page_namespace") == "0")
+            .filter(F.col("revision_is_identity_reverted").isNotNull())
+            .withColumn("label",
+                (F.col("revision_is_identity_reverted") == "true").cast("int"))
+            .withColumn("length_delta",
+                F.coalesce(F.col("revision_text_bytes_diff").cast("double"), F.lit(0.0)))
+            .withColumn("is_anon_int",
+                (F.col("event_user_is_anonymous") == "true").cast("int"))
+            .withColumn("event_ts",
+                F.to_timestamp("event_timestamp", "yyyy-MM-dd HH:mm:ss.S"))
+            .withColumn("hour_of_day", F.hour("event_ts"))
+            .withColumn("day_of_week", F.dayofweek("event_ts"))
+            .withColumn("comment_clean",
+                F.lower(F.regexp_replace(
+                    F.coalesce(F.col("event_comment"), F.lit("")), r"[^a-zA-Z0-9\s]", " ")))
+            .withColumn("title_clean",
+                F.lower(F.regexp_replace(
+                    F.coalesce(F.col("page_title_historical"), F.lit("")), r"[^a-zA-Z0-9\s]", " ")))
+            .select("revision_id","page_title_historical","label",
+                    "length_delta","is_anon_int","hour_of_day","day_of_week",
+                    "comment_clean","title_clean")
+            .na.fill({"length_delta":0.0,"is_anon_int":0,"hour_of_day":0,
+                      "day_of_week":1,"comment_clean":"","title_clean":""})
+        )
+        labeled.cache()
+        total = labeled.count()
+        pos   = labeled.filter(F.col("label") == 1).count()
+        neg   = total - pos
+        rate  = pos / total
+        assert total > 0
+        label_stats = {"total":total,"positive":pos,"negative":neg,
+                       "positive_rate":round(rate,4),"n_train":0,"n_test":0}
+        print(f"         {total} labeled rows  ({100*rate:.1f}% reverted)")
 
-check(f"80/20 split", split)
+    check("Feature engineering + label stats", feature_eng)
 
-# ── 6. Build SparkML pipeline ─────────────────────────────────────────────────
-print("\n[6] Build SparkML pipeline…")
-from pyspark.ml import Pipeline
-from pyspark.ml.classification import LogisticRegression
-from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
-from pyspark.ml.feature import HashingTF, IDF, RegexTokenizer, StandardScaler, VectorAssembler
-from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
+    # ── 5. Train / test split ──────────────────────────────────────────────────────
+    print("\n[5] Train/test split…")
 
-cv = evaluator = None
+    def split():
+        global train_df, test_df, n_train, n_test
+        train_df, test_df = labeled.randomSplit([0.8, 0.2], seed=42)
+        train_df.cache(); test_df.cache()
+        n_train = train_df.count(); n_test = test_df.count()
+        label_stats.update({"n_train":n_train,"n_test":n_test})
+        assert n_train > 0 and n_test > 0
 
-def build_pipeline():
-    global cv, evaluator
-    c_tok = RegexTokenizer(inputCol="comment_clean", outputCol="comment_tokens",
-                            pattern=r"\s+", toLowercase=True, minTokenLength=2)
-    t_tok = RegexTokenizer(inputCol="title_clean",   outputCol="title_tokens",
-                            pattern=r"\s+", toLowercase=True, minTokenLength=2)
-    c_tf  = HashingTF(inputCol="comment_tokens", outputCol="comment_tf",  numFeatures=64)
-    t_tf  = HashingTF(inputCol="title_tokens",   outputCol="title_tf",    numFeatures=32)
-    c_idf = IDF(inputCol="comment_tf", outputCol="comment_idf", minDocFreq=1)
-    t_idf = IDF(inputCol="title_tf",   outputCol="title_idf",   minDocFreq=1)
-    asm   = VectorAssembler(
-        inputCols=["comment_idf","title_idf","length_delta","is_anon_int","hour_of_day","day_of_week"],
-        outputCol="raw_features", handleInvalid="keep")
-    scl   = StandardScaler(inputCol="raw_features", outputCol="features",
-                            withMean=False, withStd=True)
-    lr    = LogisticRegression(featuresCol="features", labelCol="label",
-                                probabilityCol="probability", rawPredictionCol="raw_prediction")
-    pipeline = Pipeline(stages=[c_tok,t_tok,c_tf,t_tf,c_idf,t_idf,asm,scl,lr])
-    param_grid = (ParamGridBuilder()
-                  .addGrid(lr.regParam, [0.01, 0.1])
-                  .build())
-    evaluator = BinaryClassificationEvaluator(
-        labelCol="label", rawPredictionCol="raw_prediction", metricName="areaUnderROC")
-    cv = CrossValidator(estimator=pipeline, estimatorParamMaps=param_grid,
-                        evaluator=evaluator, numFolds=2, seed=42)
+    check(f"80/20 split", split)
 
-check("Build SparkML pipeline", build_pipeline)
+    # ── 6. Build SparkML pipeline ─────────────────────────────────────────────────
+    print("\n[6] Build SparkML pipeline…")
+    from pyspark.ml import Pipeline
+    from pyspark.ml.classification import LogisticRegression
+    from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
+    from pyspark.ml.feature import HashingTF, IDF, RegexTokenizer, StandardScaler, VectorAssembler
+    from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
-# ── 7. Train with MLflow ───────────────────────────────────────────────────────
-print("\n[7] Training (2-fold CV, 2 param combos = 4 fits on 500 rows)…")
-import mlflow, mlflow.spark
-from pyspark.ml import PipelineModel
+    def build_pipeline():
+        global cv, evaluator
+        c_tok = RegexTokenizer(inputCol="comment_clean", outputCol="comment_tokens",
+                                pattern=r"\s+", toLowercase=True, minTokenLength=2)
+        t_tok = RegexTokenizer(inputCol="title_clean",   outputCol="title_tokens",
+                                pattern=r"\s+", toLowercase=True, minTokenLength=2)
+        c_tf  = HashingTF(inputCol="comment_tokens", outputCol="comment_tf",  numFeatures=64)
+        t_tf  = HashingTF(inputCol="title_tokens",   outputCol="title_tf",    numFeatures=32)
+        c_idf = IDF(inputCol="comment_tf", outputCol="comment_idf", minDocFreq=1)
+        t_idf = IDF(inputCol="title_tf",   outputCol="title_idf",   minDocFreq=1)
+        asm   = VectorAssembler(
+            inputCols=["comment_idf","title_idf","length_delta","is_anon_int","hour_of_day","day_of_week"],
+            outputCol="raw_features", handleInvalid="keep")
+        scl   = StandardScaler(inputCol="raw_features", outputCol="features",
+                                withMean=False, withStd=True)
+        lr    = LogisticRegression(featuresCol="features", labelCol="label",
+                                    probabilityCol="probability", rawPredictionCol="raw_prediction")
+        pipeline = Pipeline(stages=[c_tok,t_tok,c_tf,t_tf,c_idf,t_idf,asm,scl,lr])
+        param_grid = (ParamGridBuilder()
+                      .addGrid(lr.regParam, [0.01, 0.1])
+                      .build())
+        evaluator = BinaryClassificationEvaluator(
+            labelCol="label", rawPredictionCol="raw_prediction", metricName="areaUnderROC")
+        cv = CrossValidator(estimator=pipeline, estimatorParamMaps=param_grid,
+                            evaluator=evaluator, numFolds=2, seed=42)
 
-best_model = None
-RUN_ID     = None
-elapsed    = 0
-metrics    = {}
+    check("Build SparkML pipeline", build_pipeline)
 
-SMOKE_MODEL = str(MODEL_DIR / "wikirisk_lr_smoke")
+    # ── 7. Train with MLflow ───────────────────────────────────────────────────────
+    print("\n[7] Training (2-fold CV, 2 param combos = 4 fits on 500 rows)…")
+    import mlflow, mlflow.spark
+    from pyspark.ml import PipelineModel
 
-def train():
-    global best_model, RUN_ID, elapsed, metrics
-    mlflow.set_tracking_uri(str(MLFLOW_DIR))
-    mlflow.set_experiment("wikirisk-smoke-test")
-    t0 = time.monotonic()
-    with mlflow.start_run(run_name="smoke-test") as run:
-        RUN_ID = run.info.run_id
-        mlflow.log_params({"model_type":"LR","n_train":n_train,"n_test":n_test})
-        cv_model   = cv.fit(train_df)
-        elapsed    = time.monotonic() - t0
-        best_model = cv_model.bestModel
-        best_lr    = best_model.stages[-1]
-        mlflow.log_params({"best_reg_param": best_lr.getRegParam()})
-    print(f"         Trained in {elapsed:.1f}s  regParam={best_lr.getRegParam()}")
+    SMOKE_MODEL = str(MODEL_DIR / "wikirisk_lr_smoke")
 
-check(f"SparkML CrossValidator training", train)
+    def train():
+        global best_model, RUN_ID, elapsed, metrics
+        mlflow.set_tracking_uri(str(MLFLOW_DIR))
+        mlflow.set_experiment("wikirisk-smoke-test")
+        t0 = time.monotonic()
+        with mlflow.start_run(run_name="smoke-test") as run:
+            RUN_ID = run.info.run_id
+            mlflow.log_params({"model_type":"LR","n_train":n_train,"n_test":n_test})
+            cv_model   = cv.fit(train_df)
+            elapsed    = time.monotonic() - t0
+            best_model = cv_model.bestModel
+            best_lr    = best_model.stages[-1]
+            mlflow.log_params({"best_reg_param": best_lr.getRegParam()})
+        print(f"         Trained in {elapsed:.1f}s  regParam={best_lr.getRegParam()}")
 
-# ── 8. Evaluate ────────────────────────────────────────────────────────────────
-print("\n[8] Evaluate on test set…")
+    check(f"SparkML CrossValidator training", train)
 
-def evaluate():
-    global metrics
-    preds = best_model.transform(test_df)
-    mc    = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction")
-    pr    = BinaryClassificationEvaluator(labelCol="label", rawPredictionCol="raw_prediction",
-                                           metricName="areaUnderPR")
-    metrics = {
-        "auc_roc"  : round(evaluator.evaluate(preds), 4),
-        "auc_pr"   : round(pr.evaluate(preds),        4),
-        "f1"       : round(mc.setMetricName("f1").evaluate(preds), 4),
-        "precision": round(mc.setMetricName("weightedPrecision").evaluate(preds), 4),
-        "recall"   : round(mc.setMetricName("weightedRecall").evaluate(preds), 4),
-        "accuracy" : round(mc.setMetricName("accuracy").evaluate(preds), 4),
-        "training_time_seconds": round(elapsed, 1),
-    }
-    with mlflow.start_run(run_id=RUN_ID):
-        mlflow.log_metrics(metrics)
-    print(f"         AUC-ROC={metrics['auc_roc']}  F1={metrics['f1']}  Acc={metrics['accuracy']}")
+    # ── 8. Evaluate ────────────────────────────────────────────────────────────────
+    print("\n[8] Evaluate on test set…")
 
-check("Evaluate + log metrics to MLflow", evaluate)
+    def evaluate():
+        global metrics
+        preds = best_model.transform(test_df)
+        mc    = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction")
+        pr    = BinaryClassificationEvaluator(labelCol="label", rawPredictionCol="raw_prediction",
+                                               metricName="areaUnderPR")
+        metrics = {
+            "auc_roc"  : round(evaluator.evaluate(preds), 4),
+            "auc_pr"   : round(pr.evaluate(preds),        4),
+            "f1"       : round(mc.setMetricName("f1").evaluate(preds), 4),
+            "precision": round(mc.setMetricName("weightedPrecision").evaluate(preds), 4),
+            "recall"   : round(mc.setMetricName("weightedRecall").evaluate(preds), 4),
+            "accuracy" : round(mc.setMetricName("accuracy").evaluate(preds), 4),
+            "training_time_seconds": round(elapsed, 1),
+        }
+        with mlflow.start_run(run_id=RUN_ID):
+            mlflow.log_metrics(metrics)
+        print(f"         AUC-ROC={metrics['auc_roc']}  F1={metrics['f1']}  Acc={metrics['accuracy']}")
 
-# ── 9. Save model + manifest ───────────────────────────────────────────────────
-print("\n[9] Save model + manifest…")
+    check("Evaluate + log metrics to MLflow", evaluate)
 
-def save_model():
-    best_model.write().overwrite().save(SMOKE_MODEL)
-    manifest = {
-        "run_id": RUN_ID,
-        "model_name": "wikirisk-smoke",
-        "model_local_path": SMOKE_MODEL,
-        "trained_at": datetime.now(tz=timezone.utc).isoformat(),
-        "data_source": "smoke_test_synthetic",
-        "label_field": "revision_is_identity_reverted",
-        "files_used": [SAMPLE_BZ2.name],
-        "metrics": metrics,
-        "training_data_stats": label_stats,
-    }
-    (ROOT/"manifests"/"smoke_manifest.json").write_text(json.dumps(manifest, indent=2))
-    loaded = PipelineModel.load(SMOKE_MODEL)
-    assert loaded is not None, "Model failed to reload"
+    # ── 9. Save model + manifest ───────────────────────────────────────────────────
+    print("\n[9] Save model + manifest…")
 
-check("Save model locally + reload verification", save_model)
+    def save_model():
+        best_model.write().overwrite().save(SMOKE_MODEL)
+        manifest = {
+            "run_id": RUN_ID,
+            "model_name": "wikirisk-smoke",
+            "model_local_path": SMOKE_MODEL,
+            "trained_at": datetime.now(tz=timezone.utc).isoformat(),
+            "data_source": "smoke_test_synthetic",
+            "label_field": "revision_is_identity_reverted",
+            "files_used": [SAMPLE_BZ2.name],
+            "metrics": metrics,
+            "training_data_stats": label_stats,
+        }
+        (ROOT/"manifests"/"smoke_manifest.json").write_text(json.dumps(manifest, indent=2))
+        loaded = PipelineModel.load(SMOKE_MODEL)
+        assert loaded is not None, "Model failed to reload"
 
-# ── 10. Matplotlib / seaborn plots ────────────────────────────────────────────
-print("\n[10] Charts (matplotlib + seaborn)…")
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
+    check("Save model locally + reload verification", save_model)
 
-def make_charts():
-    fig, ax = plt.subplots(1, 2, figsize=(10, 3))
-    ax[0].bar(["Benign","Reverted"],
-              [label_stats["negative"], label_stats["positive"]],
-              color=["#22c55e","#dc2626"])
-    ax[0].set_title("Label Distribution")
-    mnames = ["AUC-ROC","F1","Precision","Recall","Accuracy"]
-    mvals  = [metrics["auc_roc"],metrics["f1"],metrics["precision"],
-               metrics["recall"],metrics["accuracy"]]
-    ax[1].barh(mnames, mvals, color="#6366f1")
-    ax[1].set_xlim(0, 1.1)
-    ax[1].set_title("Metrics")
-    plt.tight_layout()
-    out = ROOT/"docs"/"smoke_test_chart.png"
-    plt.savefig(out, dpi=80, bbox_inches="tight")
-    plt.close()
-    assert out.exists()
+    # ── 10. Matplotlib / seaborn plots ────────────────────────────────────────────
+    print("\n[10] Charts (matplotlib + seaborn)…")
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
 
-check("Matplotlib + seaborn charts", make_charts)
+    def make_charts():
+        fig, ax = plt.subplots(1, 2, figsize=(10, 3))
+        ax[0].bar(["Benign","Reverted"],
+                  [label_stats["negative"], label_stats["positive"]],
+                  color=["#22c55e","#dc2626"])
+        ax[0].set_title("Label Distribution")
+        mnames = ["AUC-ROC","F1","Precision","Recall","Accuracy"]
+        mvals  = [metrics["auc_roc"],metrics["f1"],metrics["precision"],
+                   metrics["recall"],metrics["accuracy"]]
+        ax[1].barh(mnames, mvals, color="#6366f1")
+        ax[1].set_xlim(0, 1.1)
+        ax[1].set_title("Metrics")
+        plt.tight_layout()
+        out = ROOT/"docs"/"smoke_test_chart.png"
+        plt.savefig(out, dpi=80, bbox_inches="tight")
+        plt.close()
+        assert out.exists()
 
-# ── 11. SQLite re-score ────────────────────────────────────────────────────────
-print("\n[11] SQLite DB re-score simulation…")
-from pyspark.sql.types import DoubleType, IntegerType
-from pyspark.sql.functions import udf as _udf
+    check("Matplotlib + seaborn charts", make_charts)
 
-def rescore_db():
-    # Create a minimal smoke DB
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("""CREATE TABLE IF NOT EXISTS predictions (
-        id TEXT PRIMARY KEY, comment TEXT, page_title TEXT,
-        length_delta REAL, is_anon INTEGER, timestamp TEXT,
-        risk_score REAL, risk_label TEXT, scored INTEGER DEFAULT 0)""")
-    # Insert 10 fake rows
-    for i in range(10):
-        conn.execute(
-            "INSERT OR IGNORE INTO predictions VALUES (?,?,?,?,?,?,?,?,?)",
-            (f"smoke-{i}", f"edit comment {i}", f"PageTitle{i}",
-             float(50 + i*5), i%2, "2023-06-15T12:00:00Z", None, None, 0))
-    conn.commit()
-    conn.close()
+    # ── 11. SQLite re-score ────────────────────────────────────────────────────────
+    print("\n[11] SQLite DB re-score simulation…")
+    from pyspark.sql.types import DoubleType, IntegerType
+    from pyspark.sql.functions import udf as _udf
 
-    # Re-score via Spark
-    from pyspark.sql.types import StringType as _ST, StructType, StructField
-    schema_rs = StructType([
-        StructField("id",            _ST(),         False),
-        StructField("comment_clean", _ST(),         True),
-        StructField("title_clean",   _ST(),         True),
-        StructField("length_delta",  DoubleType(),  True),
-        StructField("is_anon_int",   IntegerType(), True),
-        StructField("hour_of_day",   IntegerType(), True),
-        StructField("day_of_week",   IntegerType(), True),
-    ])
-    conn  = sqlite3.connect(str(DB_PATH))
-    rows  = conn.execute(
-        "SELECT id,comment,page_title,length_delta,is_anon,timestamp FROM predictions"
-    ).fetchall()
-    conn.close()
+    def rescore_db():
+        # Create a minimal smoke DB
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.execute("""CREATE TABLE IF NOT EXISTS predictions (
+            id TEXT PRIMARY KEY, comment TEXT, page_title TEXT,
+            length_delta REAL, is_anon INTEGER, timestamp TEXT,
+            risk_score REAL, risk_label TEXT, scored INTEGER DEFAULT 0)""")
+        # Insert 10 fake rows
+        for i in range(10):
+            conn.execute(
+                "INSERT OR IGNORE INTO predictions VALUES (?,?,?,?,?,?,?,?,?)",
+                (f"smoke-{i}", f"edit comment {i}", f"PageTitle{i}",
+                 float(50 + i*5), i%2, "2023-06-15T12:00:00Z", None, None, 0))
+        conn.commit()
+        conn.close()
 
-    records = []
-    for (rid,comment,title,delta,is_anon,ts_str) in rows:
-        try:
-            dt = datetime.fromisoformat(str(ts_str).replace("Z","+00:00"))
-            hour,dow = dt.hour, dt.isoweekday()
-        except Exception:
-            hour,dow = 0, 1
-        records.append((
-            rid,
-            re.sub(r"[^a-zA-Z0-9\s]"," ",(comment or "").lower()),
-            re.sub(r"[^a-zA-Z0-9\s]"," ",(title   or "").lower()),
-            float(delta or 0), int(is_anon or 0), hour, dow,
-        ))
+        # Re-score via Spark
+        from pyspark.sql.types import StringType as _ST, StructType, StructField
+        schema_rs = StructType([
+            StructField("id",            _ST(),         False),
+            StructField("comment_clean", _ST(),         True),
+            StructField("title_clean",   _ST(),         True),
+            StructField("length_delta",  DoubleType(),  True),
+            StructField("is_anon_int",   IntegerType(), True),
+            StructField("hour_of_day",   IntegerType(), True),
+            StructField("day_of_week",   IntegerType(), True),
+        ])
+        conn  = sqlite3.connect(str(DB_PATH))
+        rows  = conn.execute(
+            "SELECT id,comment,page_title,length_delta,is_anon,timestamp FROM predictions"
+        ).fetchall()
+        conn.close()
 
-    loaded   = PipelineModel.load(SMOKE_MODEL)
-    df_rs    = spark.createDataFrame(records, schema=schema_rs)
-    get_prob = _udf(lambda v: float(v[1]) if v is not None else 0.5, DoubleType())
-    scored   = loaded.transform(df_rs).withColumn("risk_score", get_prob(F.col("probability")))
-    results  = scored.select("id","risk_score").toPandas()
+        records = []
+        for (rid,comment,title,delta,is_anon,ts_str) in rows:
+            try:
+                dt = datetime.fromisoformat(str(ts_str).replace("Z","+00:00"))
+                hour,dow = dt.hour, dt.isoweekday()
+            except Exception:
+                hour,dow = 0, 1
+            records.append((
+                rid,
+                re.sub(r"[^a-zA-Z0-9\s]"," ",(comment or "").lower()),
+                re.sub(r"[^a-zA-Z0-9\s]"," ",(title   or "").lower()),
+                float(delta or 0), int(is_anon or 0), hour, dow,
+            ))
 
-    updates  = []
-    for _, row in results.iterrows():
-        sc  = float(row["risk_score"])
-        lbl = "HIGH" if sc >= 0.68 else ("MEDIUM" if sc >= 0.30 else "LOW")
-        updates.append((sc, lbl, row["id"]))
+        loaded   = PipelineModel.load(SMOKE_MODEL)
+        df_rs    = spark.createDataFrame(records, schema=schema_rs)
+        get_prob = _udf(lambda v: float(v[1]) if v is not None else 0.5, DoubleType())
+        scored   = loaded.transform(df_rs).withColumn("risk_score", get_prob(F.col("probability")))
+        results  = scored.select("id","risk_score").toPandas()
 
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.executemany(
-        "UPDATE predictions SET risk_score=?,risk_label=?,scored=1 WHERE id=?", updates)
-    conn.commit()
-    verified = conn.execute(
-        "SELECT COUNT(*) FROM predictions WHERE scored=1").fetchone()[0]
-    conn.close()
-    assert verified == 10, f"Only {verified}/10 rows scored"
-    print(f"         Re-scored 10 rows  example: score={updates[0][0]:.3f} label={updates[0][1]}")
+        updates  = []
+        for _, row in results.iterrows():
+            sc  = float(row["risk_score"])
+            lbl = "HIGH" if sc >= 0.68 else ("MEDIUM" if sc >= 0.30 else "LOW")
+            updates.append((sc, lbl, row["id"]))
 
-check("SQLite re-score via trained model", rescore_db)
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.executemany(
+            "UPDATE predictions SET risk_score=?,risk_label=?,scored=1 WHERE id=?", updates)
+        conn.commit()
+        verified = conn.execute(
+            "SELECT COUNT(*) FROM predictions WHERE scored=1").fetchone()[0]
+        conn.close()
+        assert verified == 10, f"Only {verified}/10 rows scored"
+        print(f"         Re-scored 10 rows  example: score={updates[0][0]:.3f} label={updates[0][1]}")
 
-# ── 12. Idempotency check ──────────────────────────────────────────────────────
-print("\n[12] Idempotency checks…")
+    check("SQLite re-score via trained model", rescore_db)
 
-def check_idempotency():
-    # sizes.json
-    SIZE_CACHE = DATA_DIR / "sizes.json"
-    if not SIZE_CACHE.exists():
-        SIZE_CACHE.write_text(json.dumps({"_smoke_sample.tsv.bz2": 1234}))
-    cached = json.loads(SIZE_CACHE.read_text())
-    assert isinstance(cached, dict)
-    # label_stats.json
-    STATS_CACHE.write_text(json.dumps(label_stats, indent=2))
-    assert STATS_CACHE.exists()
-    # model dir
-    assert (MODEL_DIR / "wikirisk_lr_smoke").exists()
+    # ── 12. Idempotency check ──────────────────────────────────────────────────────
+    print("\n[12] Idempotency checks…")
 
-check("sizes.json + label_stats.json + model on disk", check_idempotency)
+    def check_idempotency():
+        if not SIZES_SMOKE.exists():
+            SIZES_SMOKE.write_text(json.dumps({SAMPLE_BZ2.name: 1}, indent=2))
+        cached = json.loads(SIZES_SMOKE.read_text())
+        assert isinstance(cached, dict)
+        STATS_SMOKE.write_text(json.dumps(label_stats, indent=2))
+        assert STATS_SMOKE.exists()
+        assert (MODEL_DIR / "wikirisk_lr_smoke").exists()
 
-# ── Cleanup ────────────────────────────────────────────────────────────────────
-print("\n[Cleanup] Stopping Spark…")
-try:
-    spark.stop()
-    print("  Spark stopped.")
-except Exception:
-    pass
+    check("sizes_smoke.json + label_stats_smoke.json + model on disk", check_idempotency)
 
-# Remove smoke artifacts (keep real production artifacts untouched)
-import shutil
-for p in [SAMPLE_BZ2, DB_PATH,
-          MODEL_DIR/"wikirisk_lr_smoke",
-          ROOT/"manifests"/"smoke_manifest.json",
-          ROOT/"docs"/"smoke_test_chart.png"]:
-    if Path(p).exists():
-        (shutil.rmtree if Path(p).is_dir() else Path(p).unlink)(p)
+    # ── Cleanup ────────────────────────────────────────────────────────────────────
+    print("\n[Cleanup] Stopping Spark…")
+    try:
+        spark.stop()
+        print("  Spark stopped.")
+    except Exception:
+        pass
 
-# ── Summary ────────────────────────────────────────────────────────────────────
-print("\n" + "="*55)
-if errors:
-    print(f"{FAIL}  SMOKE TEST FAILED — {len(errors)} error(s):")
-    for label, e in errors:
-        print(f"     • {label}: {e}")
-    sys.exit(1)
-else:
-    print(f"{PASS}  ALL CHECKS PASSED — notebook is ready to run.")
+    # Remove smoke artifacts (keep real production artifacts untouched)
+    import shutil
+    # Keep _smoke_sample.tsv.bz2 in repo for notebook USE_SMOKE_DEMO — do not delete
+    for p in [DB_PATH,
+              MODEL_DIR/"wikirisk_lr_smoke",
+              ROOT/"manifests"/"smoke_manifest.json",
+              ROOT/"docs"/"smoke_test_chart.png",
+              STATS_SMOKE,
+              SIZES_SMOKE]:
+        if Path(p).exists():
+            (shutil.rmtree if Path(p).is_dir() else Path(p).unlink)(p)
+
+    # ── Summary ────────────────────────────────────────────────────────────────
+    print("\n" + "="*55)
+    if errors:
+        print(f"{FAIL}  SMOKE TEST FAILED — {len(errors)} error(s):")
+        for label, e in errors:
+            print(f"     • {label}: {e}")
+        sys.exit(1)
+    print(f"{PASS}  ALL CHECKS PASSED — fast pipeline OK (artifacts under data/).")
     print("="*55)
-    print("\nNext step: open the notebook and run Kernel → Restart & Run All")
-    print(f"  http://localhost:8888/notebooks/notebooks/WikiRisk_Training_Pipeline.ipynb")
+    print("\nWhen you are ready, run the Jupyter notebook yourself (step-by-step recommended).")
+    print("  notebooks/WikiRisk_Training_Pipeline.ipynb")
+    print("  For a quick demo: set USE_SMOKE_DEMO = True in cell 2 after --generate-only.")
+
+
+if __name__ == "__main__":
+    main()

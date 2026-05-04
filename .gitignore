@@ -6,6 +6,8 @@
 # ── Data (large files – track manifests and model, not raw dumps) ─────────────
 data/raw/dumps/
 data/raw/mediawiki_history/*.bz2
+!data/raw/mediawiki_history/_smoke_sample.tsv.bz2
+data/spark-local/
 data/processed/
 data/stream/
 data/predictions/

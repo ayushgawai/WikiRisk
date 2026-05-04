@@ -38,9 +38,9 @@ MODEL_DIR  = ROOT / "data" / "model"
 MANIFEST   = ROOT / "manifests" / "model_manifest.json"
 MLFLOW_DIR = ROOT / "mlruns"
 
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
-(ROOT / "manifests").mkdir(parents=True, exist_ok=True)
+SPARK_LOCAL = ROOT / "data" / "spark-local"
+for _d in (DATA_DIR, MODEL_DIR, ROOT / "manifests", SPARK_LOCAL):
+    _d.mkdir(parents=True, exist_ok=True)
 
 # ── Files to download (4 monthly snapshots: ~3 GB compressed / ~25 GB raw) ──
 BASE_URL = "https://dumps.wikimedia.org/other/mediawiki_history/2026-03/enwiki"
@@ -154,6 +154,7 @@ def build_spark():
         SparkSession.builder
         .master("local[*]")
         .appName("WikiRisk-FullTraining")
+        .config("spark.local.dir", str(SPARK_LOCAL))
         .config("spark.driver.memory", "6g")
         .config("spark.executor.memory", "6g")
         .config("spark.sql.shuffle.partitions", "100")
@@ -172,7 +173,7 @@ def load_and_label(spark, files: list[Path]):
     from pyspark.sql.types import StructType, StructField, StringType
 
     print(f"\n[SPARK] Reading {len(files)} bz2 TSV files...")
-    paths = [str(f) for f in files]
+    paths = ["file://" + str(f.resolve()) for f in files]
 
     # All columns are strings in TSV; we'll cast what we need
     schema = StructType([StructField(c, StringType(), True) for c in MW_COLUMNS])
