@@ -156,13 +156,23 @@ def make_row(i):
     }
     return "\t".join(row_vals[c] for c in MW_HEADER)
 
-def gen_sample(*, force: bool = False) -> None:
+def _bz2_line_count(path: Path) -> int:
+    with bz2.open(path, "rt", encoding="utf-8", errors="replace") as fh:
+        return sum(1 for _ in fh)
+
+
+def gen_sample(*, force: bool = False, n_rows: int = 2000) -> None:
     """Write synthetic bz2 TSV under data/raw/mediawiki_history/ (no tmp)."""
-    if not force and SAMPLE_BZ2.exists() and SAMPLE_BZ2.stat().st_size > 500:
-        print(f"         Reusing existing {SAMPLE_BZ2.name} ({SAMPLE_BZ2.stat().st_size:,} bytes)")
+    if (
+        not force
+        and SAMPLE_BZ2.exists()
+        and SAMPLE_BZ2.stat().st_size > 500
+        and _bz2_line_count(SAMPLE_BZ2) == n_rows
+    ):
+        print(f"         Reusing existing {SAMPLE_BZ2.name} ({SAMPLE_BZ2.stat().st_size:,} bytes, {n_rows} rows)")
         return
     lines = []
-    for i in range(2000):
+    for i in range(n_rows):
         lines.append(make_row(i))
     data = ("\n".join(lines) + "\n").encode()
     with bz2.open(SAMPLE_BZ2, "wb") as fh:
@@ -173,19 +183,20 @@ def gen_sample(*, force: bool = False) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="WikiRisk smoke test (in-repo paths only)")
     p.add_argument("--generate-only", action="store_true", help="Write _smoke_sample.tsv.bz2 and exit")
+    p.add_argument("--rows", type=int, default=2000, metavar="N", help="Synthetic rows (default 2000; use 100 for a very fast check)")
     opts, _ = p.parse_known_args()
     if opts.generate_only:
-        gen_sample(force=True)
+        gen_sample(force=True, n_rows=opts.rows)
         print("\nWrote:", SAMPLE_BZ2.resolve())
         print("In the notebook, set USE_SMOKE_DEMO = True in cell 2, then run cells step by step.")
         return
 
-    _run_smoke_pipeline()
+    _run_smoke_pipeline(rows=opts.rows)
 
 
-def _run_smoke_pipeline() -> None:
+def _run_smoke_pipeline(*, rows: int = 2000) -> None:
     print("\n[1] Synthetic bz2 sample (in-repo, reused if present)…")
-    check("Generate / reuse _smoke_sample.tsv.bz2", lambda: gen_sample(force=False))
+    check("Generate / reuse _smoke_sample.tsv.bz2", lambda: gen_sample(force=False, n_rows=rows))
 
     # ── 2. Spark session ──────────────────────────────────────────────────────────
     print("\n[2] Starting SparkSession…")
@@ -229,7 +240,7 @@ def _run_smoke_pipeline() -> None:
         n = raw.count()
         assert n > 0, f"Expected >0 rows, got {n}"
 
-    check("Load bz2 TSV (2000 rows)", load_raw)
+    check("Load bz2 TSV into Spark DataFrame", load_raw)
 
     # ── 4. Feature engineering + label stats ──────────────────────────────────────
     print("\n[4] Feature engineering…")

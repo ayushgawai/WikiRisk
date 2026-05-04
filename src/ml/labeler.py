@@ -22,7 +22,9 @@ from pyspark.sql import functions as F
 RISKY_COMMENT_PATTERNS = [
     r"(?i)\brevert",
     r"(?i)\brvv\b",
+    r"(?i)\brv\b",               # common shorthand (e.g. "rv vandalism")
     r"(?i)\bvandaliz",
+    r"(?i)\bvandalism\b",        # whole word (plain \bvandal\b misses "vandalism")
     r"(?i)\bvandal\b",
     r"(?i)\bspam\b",
     r"(?i)\bundo\b",
