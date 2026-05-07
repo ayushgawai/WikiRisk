@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     # ── UI ─────────────────────────────────────────────────────────────────
     api_url: str = "http://localhost:8000"
 
+    # ── Notifications ──────────────────────────────────────────────────────
+    slack_webhook_url: str = Field("", description="Slack incoming webhook")
+    smtp_host: str = Field("", description="SMTP host for email alerts")
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    alert_to_email: str = ""
+
     # ── OpenAI ─────────────────────────────────────────────────────────────
     openai_api_key: str = Field("", description="OpenAI API key")
     openai_model: str = "gpt-4o-mini"

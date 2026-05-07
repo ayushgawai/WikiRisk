@@ -92,9 +92,10 @@ async def test_health_returns_ok(client):
     r = await client.get("/health")
     assert r.status_code == 200
     data = r.json()
-    assert data["status"] == "ok"
+    assert data["status"] in {"ok", "degraded"}
     assert "version" in data
     assert "uptime_seconds" in data
+    assert "mlflow" in data["services"]
 
 
 @pytest.mark.asyncio
@@ -115,6 +116,15 @@ async def test_recent_edits_filter_high(client):
     data = r.json()
     for item in data["items"]:
         assert item["risk_label"] == "HIGH"
+
+
+@pytest.mark.asyncio
+async def test_recent_edits_search_page_title(client):
+    r = await client.get("/edits/recent", params={"search": "Article 1"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] >= 1
+    assert any("Article 1" in item["page_title"] for item in data["items"])
 
 
 @pytest.mark.asyncio
@@ -179,6 +189,20 @@ async def test_explain_uses_fallback(client):
         data = r.json()
         assert "explanation" in data
         assert len(data["explanation"]) > 10
+
+
+@pytest.mark.asyncio
+async def test_notify_without_config_returns_setup_message(client):
+    conn = sqlite3.connect(_TMP_DB)
+    row = conn.execute("SELECT id FROM predictions LIMIT 1").fetchone()
+    conn.close()
+
+    r = await client.post(f"/notify/{row[0]}")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["delivered"] is False
+    assert "SLACK_WEBHOOK_URL" in data["message"]
+    assert {c["channel"] for c in data["channels"]} == {"slack", "email"}
 
 
 @pytest.mark.asyncio

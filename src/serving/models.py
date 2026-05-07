@@ -39,8 +39,7 @@ class EditRecord(BaseModel):
         """Link to the Wikipedia revision diff."""
         if self.rev_id:
             return (
-                f"https://en.wikipedia.org/w/index.php"
-                f"?diff={self.rev_id}"
+                f"https://en.wikipedia.org/wiki/Special:Diff/{self.rev_id}"
             )
         title = self.page_title.replace(" ", "_")
         return f"https://en.wikipedia.org/wiki/{title}"

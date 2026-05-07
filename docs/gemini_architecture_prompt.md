@@ -38,13 +38,15 @@ Diagram content to include:
    - SQLite / local prediction store
    - Parquet / processed data archive
    - FastAPI backend
-   - health, stats, recent edits, and explain endpoints
+   - health, stats, recent edits, explain, and notify endpoints
+   - Streamlit dashboard
 
 5. Output / demo impact block
    - moderation triage
    - misinformation early warning
    - integrity monitoring
    - real-time trust scoring
+   - Slack/email alerting for watched pages
 
 Suggested layout:
 - top row: data sources
@@ -60,11 +62,13 @@ Text to include on the diagram:
 - SparkML Logistic Regression
 - MLflow Tracking
 - FastAPI Serving Layer
+- Streamlit Live Dashboard
+- Slack / Email Alerts
 
 Extra notes:
 - show that the model is already trained and reused for live scoring
 - emphasize that this is a production-style demo, not a toy notebook
 - include arrows that show data flowing from historical training to live inference
-- do not include a frontend/dashboard component; the current demo is backend-only
-- optionally show MLflow UI as a separate tracking/ops tool, not as part of the
+- include the Streamlit dashboard as the live visualization layer that reads from FastAPI
+- show MLflow UI as a separate tracking/ops tool, not as part of the
    serving path

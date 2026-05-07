@@ -2,7 +2,7 @@
 
 ## What the system does
 
-WikiRisk ingests **live** English Wikipedia edits (Wikimedia EventStreams), scores each edit with a **trained SparkML model**, stores results in SQLite, exposes them through a **FastAPI** service, and shows a **Streamlit** dashboard with optional **OpenAI** explanations. **MLflow** tracks training runs and metrics. **Apache Spark** is used both for **batch training** on historical dumps and for **structured streaming** in the architecture (where configured).
+WikiRisk ingests **live** English Wikipedia edits (Wikimedia EventStreams), scores each edit with a **trained SparkML model**, stores results in SQLite, exposes them through a **FastAPI** service, and shows a **Streamlit** dashboard with **OpenAI** explanations. **MLflow** tracks training runs and metrics. **Apache Spark** is used both for **batch training** on historical dumps and for **structured streaming** in the architecture.
 
 ---
 
@@ -41,7 +41,7 @@ This is **not** a subjective “we guessed risk” label; it is **observed commu
 ## Does something like this already exist? Why is this project still useful?
 
 - **Wikimedia already runs** large-scale quality models (e.g. **ORES / Lift Wing** “damaging” scores). Those are **production** services; students typically do not retrain them end-to-end on raw multi-GB dumps.
-- **Our contribution** is an **integrated teaching / demo stack**: download → Spark feature pipeline → cross-validated LR → MLflow → **local** model artifact → **same** model applied to **live** edits in an app with API + UI + optional LLM explanations. That full loop in one repo is what is “unique” for a course project—not beating ORES on accuracy.
+- **Our contribution** is an **integrated teaching / demo stack**: download → Spark feature pipeline → cross-validated LR → MLflow → **local** model artifact → **same** model applied to **live** edits in an app with API + UI + LLM explanations. That full loop in one repo is what is “unique” for a course project—not beating ORES on accuracy.
 
 ---
 
@@ -73,10 +73,10 @@ This is **not** a subjective “we guessed risk” label; it is **observed commu
 
 **We do not run the notebook for you from automation**—run `notebooks/WikiRisk_Training_Pipeline.ipynb` yourself (cell-by-cell is ideal for showing outputs).
 
-1. Optional **fast path:**  
+1. **Fast path:**  
    `python scripts/smoke_test_notebook.py --generate-only`  
    then set `USE_SMOKE_DEMO = True` in **cell 2** of the notebook.
 2. **Full path:** leave `USE_SMOKE_DEMO = False`, ensure the three monthly `.bz2` files are present, then execute the notebook (long run).
 
-Optional CLI check (fast, no notebook):  
+CLI check (fast, no notebook):  
 `python scripts/smoke_test_notebook.py`

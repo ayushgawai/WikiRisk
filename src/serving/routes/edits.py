@@ -24,6 +24,12 @@ async def recent_edits(
     ),
     scored_only: bool = Query(False, description="Only return scored edits"),
     wiki: str = Query("enwiki", description="Target wiki"),
+    search: Optional[str] = Query(
+        None,
+        min_length=1,
+        max_length=120,
+        description="Search page title, edit summary, editor, or revision ID",
+    ),
 ) -> RecentEditsResponse:
     """Retrieve recent Wikipedia edits with risk scores (newest first)."""
     items, total = await fetch_recent_edits(
@@ -32,6 +38,7 @@ async def recent_edits(
         risk_label=risk_label,
         scored_only=scored_only,
         wiki=wiki,
+        search=search,
     )
 
     records = []

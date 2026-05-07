@@ -42,9 +42,11 @@ Wikimedia EventStreams (SSE)                        │
                ▼                             ▼
         SQLite DB                   Parquet Archive
                │
-       FastAPI Backend  ──►  /health, /stats, /edits/recent, /explain/{id}
+       FastAPI Backend  ──►  /health, /stats, /edits/recent, /explain, /notify
              │
-       OpenAI Explainer
+             ├── Streamlit Dashboard
+             ├── OpenAI Explainer
+             └── Slack / Email Alerts
 ```
 
 ---
@@ -56,7 +58,7 @@ Wikimedia EventStreams (SSE)                        │
 - Python 3.11+
 - Java 17+ (for PySpark)
 - Docker + Docker Compose (for full stack)
-- OpenAI API key (optional — AI explanations fall back gracefully)
+- OpenAI API key for AI explanations
 
 ### 1. Local development
 
@@ -66,14 +68,15 @@ make setup
 
 # Edit environment variables
 cp .env.example .env
-# → fill in OPENAI_API_KEY (optional)
+# → fill in OPENAI_API_KEY
 
 # Run batch pipeline (skip download if you already have dumps)
 make batch            # parses existing dumps
 make train            # trains model + logs to MLflow
 
-# Start services (3 terminals)
+# Start services (4 terminals for the full local demo)
 make serve            # FastAPI on :8000
+make ui               # Streamlit dashboard on :8501
 make collect          # SSE collector (populates DB with live edits)
 make stream           # Spark Structured Streaming processor
 make live             # collector + processor together
@@ -91,6 +94,7 @@ make up               # builds + starts all services
 #   MinIO console    →  http://localhost:9001
 #   MLflow UI        →  http://localhost:5001
 #   API docs         →  http://localhost:8000/docs
+#   Dashboard        →  http://localhost:8501
 #   Streaming logs   →  see terminal output from collector / processor
 ```
 
@@ -177,6 +181,7 @@ MLflow UI: http://localhost:5001
 | `/edits/{id}` | GET | Single edit record |
 | `/explain/{id}` | GET | AI explanation for risk |
 | `/explain` | POST | AI explanation (body: `{"edit_id": "..."}`) |
+| `/notify/{id}` | POST | Slack/email alert for a selected edit |
 
 Full interactive docs: http://localhost:8000/docs
 
@@ -189,12 +194,30 @@ It includes:
 - Spark Structured Streaming scoring into SQLite and Parquet
 - health and stats endpoints for the current service state
 - AI explanation endpoints for human-readable context
+- a Streamlit dashboard for live filtering, inspection, explanations, and alert triggers
 
 Launch locally with:
 
 ```bash
 make live
 ```
+
+## Dashboard and Alerts
+
+Run the presenter dashboard with:
+
+```bash
+make ui
+```
+
+The dashboard reads FastAPI endpoints, visualizes live risk bands, lets you
+inspect individual edits, generates explanations, and can trigger
+alerts. For Slack, set `SLACK_WEBHOOK_URL` in `.env`. For email, set
+`SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL`,
+and `ALERT_TO_EMAIL`.
+
+See [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md) for the exact presentation
+flow and alert setup examples.
 
 ---
 
@@ -229,7 +252,7 @@ wikirisk/
 │   │   ├── models.py         Pydantic response models
 │   │   ├── database.py       Async SQLite layer (aiosqlite)
 │   │   └── routes/           health, edits, explain endpoints
-│   ├── ui/app.py             Streamlit dashboard
+│   ├── ui/app.py             Streamlit live dashboard
 │   └── ai/explainer.py       OpenAI GPT + rule-based fallback
 │
 ├── manifests/

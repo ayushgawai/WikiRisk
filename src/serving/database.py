@@ -79,6 +79,7 @@ async def fetch_recent_edits(
     risk_label: Optional[str] = None,
     scored_only: bool = False,
     wiki: str = "enwiki",
+    search: Optional[str] = None,
 ) -> tuple[list[dict], int]:
     """
     Return (items, total_count) for the recent edits query.
@@ -93,6 +94,13 @@ async def fetch_recent_edits(
 
     if scored_only:
         conditions.append("scored = 1")
+
+    if search:
+        conditions.append(
+            "(page_title LIKE ? OR comment LIKE ? OR user LIKE ? OR rev_id LIKE ?)"
+        )
+        pattern = f"%{search.strip()}%"
+        params.extend([pattern, pattern, pattern, pattern])
 
     where = "WHERE " + " AND ".join(conditions)
 

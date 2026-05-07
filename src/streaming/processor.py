@@ -245,7 +245,7 @@ def run_streaming_processor(
             )
 
         rows_pd = scored.select(
-            F.col("id").cast("string").alias("rev_id"),
+            F.col("revision.new").cast("string").alias("rev_id"),
             F.col("title").alias("page_title"),
             F.col("namespace"),
             F.col("user"),
