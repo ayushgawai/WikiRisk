@@ -412,7 +412,7 @@ def main() -> None:
         scored_only = st.checkbox("Scored edits only", value=True)
         search = st.text_input("Search pages", placeholder="Article, editor, summary, rev id")
         st.divider()
-        st.link_button("Wikimedia live stream", STREAM_URL, use_container_width=True)
+        st.link_button("Wikimedia live stream", "https://stream.wikimedia.org/v2/ui/#/?streams=mediawiki.page_change.v1", use_container_width=True)
         st.link_button("API docs", f"{API_BASE}/docs", use_container_width=True)
         st.link_button("MLflow UI", MLFLOW_URL, use_container_width=True)
         st.caption("Run `make live` to keep collector and Spark streaming active.")
