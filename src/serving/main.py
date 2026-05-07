@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from src.common.logger import configure_logging, get_logger
 from src.config import get_settings
 from src.serving.database import init_db
-from src.serving.routes import edits, explain, health, notify
+from src.serving.routes import edits, explain, health
 
 log = get_logger(__name__)
 cfg = get_settings()
@@ -97,7 +97,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
 app.include_router(health.router)
 app.include_router(edits.router)
 app.include_router(explain.router)
-app.include_router(notify.router)
 
 
 @app.get("/", include_in_schema=False)

@@ -75,7 +75,12 @@ async def generate_explanation(edit: dict) -> dict:
 
     if not cfg.openai_api_key:
         log.info("openai_key_missing_using_fallback", edit_id=edit.get("id"))
-        return _rule_based_explanation(edit)
+        result = _rule_based_explanation(edit)
+        try:
+            _mlflow_rest_log_explanation(edit, result, cfg)
+        except Exception:
+            pass
+        return result
 
     try:
         from openai import AsyncOpenAI
@@ -109,6 +114,108 @@ async def generate_explanation(edit: dict) -> dict:
                     model=model_used,
                     tokens=tokens,
                 )
+                # Best-effort: log explanation to MLflow tracking (if available).
+                try:
+                    import mlflow
+                    import tempfile
+
+                    try:
+                        mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
+                        mlflow.set_experiment(cfg.mlflow_experiment_name)
+                    except Exception:
+                        # Non-fatal: continue even if setting experiment/URI fails
+                        pass
+
+                    try:
+                        with mlflow.start_run():
+                            mlflow.log_param("edit_id", edit.get("id"))
+                            mlflow.log_param("model", model_used)
+                            if edit.get("risk_label"):
+                                mlflow.log_param("risk_label", edit.get("risk_label"))
+                            if edit.get("risk_score") is not None:
+                                try:
+                                    mlflow.log_metric("risk_score", float(edit.get("risk_score")))
+                                except Exception:
+                                    pass
+                            # write explanation to a temp file and log as artifact
+                            with tempfile.NamedTemporaryFile("w+", delete=False) as tf:
+                                tf.write(text)
+                                tf.flush()
+                                mlflow.log_artifact(tf.name, artifact_path="explanations")
+                    except Exception as e:
+                        log.warning("mlflow_log_failed", error=str(e), edit_id=edit.get("id"))
+                except Exception:
+                    # mlflow package not available; attempt REST API fallback to server
+                    try:
+                        import requests
+                        base = cfg.mlflow_tracking_uri.rstrip("/")
+
+                        # get experiment id by name
+                        exp_resp = requests.post(
+                            f"{base}/api/2.0/mlflow/experiments/get-by-name",
+                            json={"name": cfg.mlflow_experiment_name},
+                            timeout=5,
+                        )
+                        if exp_resp.status_code == 200:
+                            exp_id = exp_resp.json().get("experiment", {}).get("experiment_id")
+                        else:
+                            # try create experiment
+                            create_resp = requests.post(
+                                f"{base}/api/2.0/mlflow/experiments/create",
+                                json={"name": cfg.mlflow_experiment_name},
+                                timeout=5,
+                            )
+                            exp_id = create_resp.json().get("experiment_id")
+
+                        if exp_id:
+                            # create a run
+                            run_resp = requests.post(
+                                f"{base}/api/2.0/mlflow/runs/create",
+                                json={
+                                    "experiment_id": exp_id,
+                                    "start_time": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                                    "tags": [{"key": "edit_id", "value": str(edit.get("id"))}],
+                                },
+                                timeout=5,
+                            )
+                            run = run_resp.json().get("run", {})
+                            run_id = run.get("info", {}).get("run_id")
+                            if run_id:
+                                # log params (explanation may be long; we store truncated param and model)
+                                try:
+                                    requests.post(
+                                        f"{base}/api/2.0/mlflow/runs/log-parameter",
+                                        json={"run_id": run_id, "key": "model", "value": str(model_used)},
+                                        timeout=3,
+                                    )
+                                    if edit.get("risk_label"):
+                                        requests.post(
+                                            f"{base}/api/2.0/mlflow/runs/log-parameter",
+                                            json={"run_id": run_id, "key": "risk_label", "value": str(edit.get("risk_label"))},
+                                            timeout=3,
+                                        )
+                                    if edit.get("risk_score") is not None:
+                                        try:
+                                            requests.post(
+                                                f"{base}/api/2.0/mlflow/runs/log-metric",
+                                                json={"run_id": run_id, "key": "risk_score", "value": float(edit.get("risk_score"))},
+                                                timeout=3,
+                                            )
+                                        except Exception:
+                                            pass
+                                    # store explanation as a parameter (truncated to 2000 chars)
+                                    expl_text = text[:2000]
+                                    requests.post(
+                                        f"{base}/api/2.0/mlflow/runs/log-parameter",
+                                        json={"run_id": run_id, "key": "explanation", "value": expl_text},
+                                        timeout=5,
+                                    )
+                                except Exception as e:
+                                    log.warning("mlflow_rest_log_failed", error=str(e), edit_id=edit.get("id"))
+                    except Exception:
+                        # final fallback: ignore mlflow logging errors
+                        log.debug("mlflow_rest_unavailable", edit_id=edit.get("id"))
+
                 return {
                     "explanation": text,
                     "model": model_used,
@@ -131,7 +238,12 @@ async def generate_explanation(edit: dict) -> dict:
             error=str(last_exc),
             edit_id=edit.get("id"),
         )
-        return _rule_based_explanation(edit)
+        result = _rule_based_explanation(edit)
+        try:
+            _mlflow_rest_log_explanation(edit, result, cfg)
+        except Exception:
+            pass
+        return result
 
     except Exception as exc:
         log.warning(
@@ -139,7 +251,12 @@ async def generate_explanation(edit: dict) -> dict:
             error=str(exc),
             edit_id=edit.get("id"),
         )
-        return _rule_based_explanation(edit)
+        result = _rule_based_explanation(edit)
+        try:
+            _mlflow_rest_log_explanation(edit, result, cfg)
+        except Exception:
+            pass
+        return result
 
 
 def _rule_based_explanation(edit: dict) -> dict:
@@ -195,3 +312,60 @@ def _rule_based_explanation(edit: dict) -> dict:
         "model": "rule-based-fallback",
         "generated_at": datetime.now(tz=timezone.utc).isoformat(),
     }
+
+
+def _mlflow_rest_log_explanation(edit: dict, result: dict, cfg) -> None:
+    """Best-effort: log explanation to MLflow REST API if available."""
+    try:
+        import requests
+        base = cfg.mlflow_tracking_uri.rstrip("/")
+        # get or create experiment
+        exp_resp = requests.post(
+            f"{base}/api/2.0/mlflow/experiments/get-by-name",
+            json={"name": cfg.mlflow_experiment_name},
+            timeout=5,
+        )
+        if exp_resp.status_code == 200:
+            exp_id = exp_resp.json().get("experiment", {}).get("experiment_id")
+        else:
+            create_resp = requests.post(
+                f"{base}/api/2.0/mlflow/experiments/create",
+                json={"name": cfg.mlflow_experiment_name},
+                timeout=5,
+            )
+            exp_id = create_resp.json().get("experiment_id")
+
+        if not exp_id:
+            return
+
+        run_resp = requests.post(
+            f"{base}/api/2.0/mlflow/runs/create",
+            json={
+                "experiment_id": exp_id,
+                "start_time": int(datetime.now(tz=timezone.utc).timestamp() * 1000),
+                "tags": [{"key": "edit_id", "value": str(edit.get("id"))}],
+            },
+            timeout=5,
+        )
+        run = run_resp.json().get("run", {})
+        run_id = run.get("info", {}).get("run_id")
+        if not run_id:
+            return
+
+        # log a few params/metrics
+        try:
+            requests.post(f"{base}/api/2.0/mlflow/runs/log-parameter", json={"run_id": run_id, "key": "model", "value": str(result.get("model"))}, timeout=3)
+            if edit.get("risk_label"):
+                requests.post(f"{base}/api/2.0/mlflow/runs/log-parameter", json={"run_id": run_id, "key": "risk_label", "value": str(edit.get("risk_label"))}, timeout=3)
+            if edit.get("risk_score") is not None:
+                try:
+                    requests.post(f"{base}/api/2.0/mlflow/runs/log-metric", json={"run_id": run_id, "key": "risk_score", "value": float(edit.get("risk_score"))}, timeout=3)
+                except Exception:
+                    pass
+            # store explanation truncated
+            expl_text = result.get("explanation", "")[:2000]
+            requests.post(f"{base}/api/2.0/mlflow/runs/log-parameter", json={"run_id": run_id, "key": "explanation", "value": expl_text}, timeout=5)
+        except Exception:
+            return
+    except Exception:
+        return

@@ -20,19 +20,25 @@ VERSION = "1.0.0"
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     """Return service health status."""
-    import httpx
+    try:
+        import httpx
+    except Exception:
+        httpx = None
 
     services: dict[str, str] = {}
 
     # MLflow is a required part of the demo/provenance story.
     from src.config import get_settings
     cfg = get_settings()
-    try:
-        async with httpx.AsyncClient(timeout=3) as client:
-            r = await client.get(f"{cfg.mlflow_tracking_uri}/health")
-            services["mlflow"] = "ok" if r.status_code == 200 else "degraded"
-    except Exception:
+    if httpx is None:
         services["mlflow"] = "unreachable"
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=3) as client:
+                r = await client.get(f"{cfg.mlflow_tracking_uri}/health")
+                services["mlflow"] = "ok" if r.status_code == 200 else "degraded"
+        except Exception:
+            services["mlflow"] = "unreachable"
 
     services["api"] = "ok"
     services["database"] = "ok"

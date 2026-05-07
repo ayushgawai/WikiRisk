@@ -1,11 +1,10 @@
-# Claude Prompt: Create the WikiRisk Presentation Deck
+# Presentation Deck Prompt: WikiRisk (Slide-by-Slide)
 
-Create a polished, professional presentation deck for a university big-data project.
+Create a concise, professional presentation deck for the professor-review sequence below. Keep each slide minimalist, with 3–5 bullets, short speaker notes, and a single visual suggestion. Use the Gemini architecture diagram on the System Architecture slide.
 
-Project title: **WikiRisk: Real-Time Wikipedia Edit Risk Detection System**
+Project title: **WikiRisk — Real-Time Wikipedia Edit Risk Detection System**
 
-Use the following presentation sequence exactly:
-
+Presentation Sequence (must follow exactly):
 1. Problem Statement
 2. Historical / Realtime Dataset
 3. System Architecture
@@ -14,57 +13,56 @@ Use the following presentation sequence exactly:
 6. Visualization / Live Demo (must be live)
 7. Conclusion (summary, lessons, future work)
 
-Important constraints:
-- The project is already trained and running locally. Do **not** describe retraining as part of the demo.
-- Emphasize that the system uses the saved model, streaming pipeline, API, and SQLite prediction store that are already built.
-- The deck should feel like a real production big-data demo, not a toy notebook.
-- Make it visually clean, modern, and easy to present aloud.
-- Include concise speaker-friendly bullets, not long paragraphs.
-- The live demo should focus on the dashboard, API, streaming output, MLflow tracking, and saved prediction store.
-- The architecture slide should incorporate the Gemini-generated architecture diagram.
+Constraints and tone:
+- The system is already trained and running locally — do NOT describe retraining.
+- Emphasize production-style provenance: saved model artifact, streaming collector, FastAPI serving, SQLite prediction store, MLflow tracking.
+- Clean, academic-professional visuals; avoid dense paragraphs and unnecessary jargon.
+- Slides must be speaker-friendly: include short speaker notes (1–2 lines) per slide.
 
-What the deck should communicate:
-- Wikipedia is a high-volume collaborative platform where harmful edits can appear in real time.
-- WikiRisk uses Spark batch processing on historical Wikipedia revision data.
-- A SparkML classifier scores edit risk using saved artifacts and MLflow-tracked training results.
-- Spark Structured Streaming handles incoming recent-change events.
-- FastAPI serves health, stats, recent-edit, explanation, and notification data.
-- The serving layer exposes health, stats, recent-edit, explain, and notify endpoints for the demo.
-- The database stores predictions and live records for fast retrieval.
-- The Streamlit dashboard is the presenter-facing visualization layer.
+Slide-by-slide outline (deliverable):
+- For each slide produce: `title`, `3–5 bullets`, `speaker notes` (1–2 lines), `visual suggestion` (one short line).
 
-Risk calculation guidance:
-- Explain that the model outputs `risk_score`: the SparkML Logistic Regression probability for class 1, trained from historical Wikimedia `revision_is_identity_reverted` labels.
-- Explain that class 1 means the edit was later identity-reverted in Wikipedia history, so the score estimates "likelihood this edit resembles edits the community later reverted."
-- Mention the main features: TF-IDF edit summary/comment, TF-IDF page title, byte delta, anonymous editor flag, namespace, hour of day, and day of week.
-- Explain the live risk type mapping from `src/config/settings.py`: HIGH when score >= 0.20, MEDIUM when score >= 0.08, otherwise LOW.
-- Make clear that OpenAI explanations do not calculate the risk; they explain the already-computed SparkML score.
+Specific guidance per slide:
 
-DB schema guidance:
-- Show the SQLite prediction store as the source of truth for the demo.
-- Include the core fields: id, rev_id, page_title, namespace, user, is_anon, comment, length_delta, timestamp, wiki, risk_score, risk_label, scored, created_at.
-- Mention that the database is populated by the streaming pipeline and read by the API/UI.
+1) Problem Statement
+- Bullets: (a) high-volume collaborative editing leads to risky/harmful edits appearing quickly; (b) human review is slow and costly; (c) need lightweight automated triage with explainability.
+- Speaker note: one sentence framing impact and motivation.
+- Visual: single contextual image / icon showing Wikipedia edits flowing in.
 
-Visualization / live demo guidance:
-- Show the actual workflow end to end through the Streamlit dashboard.
-- Demonstrate live risk filters, edit detail inspection, AI/rule-based explanation generation, alert trigger, API responses, the SQLite prediction store, the streaming processor, and MLflow runs/artifacts.
-- Mention that the demo is based on the already-trained model and saved artifacts.
-- Make clear that the UI is a thin visualization and operations layer over FastAPI and SQLite, not a notebook.
+2) Historical / Realtime Dataset
+- Bullets: (a) historical dumps (Wikimedia revision history) for training; (b) EventStreams RecentChange for live events; (c) key schema and volume characteristics.
+- Speaker note: mention sampling strategy and what fields are used (title, summary, byte delta, anon flag).
+- Visual: two small boxes labeled "historical dumps" and "EventStreams" with brief stats.
 
-Style guidance:
-- Use a professional academic / startup-demo tone.
-- Prefer clear section headers and slide titles.
-- Include 1-2 key takeaway bullets per slide.
-- Suggest simple visual layouts when helpful.
+3) System Architecture
+- Bullets: (a) batch training produces a saved PipelineModel (SparkML) tracked in MLflow; (b) streaming collector + real-time scorer reuse saved model; (c) FastAPI exposes endpoints and reads/writes the SQLite prediction store; (d) MLflow provides provenance and artifacts (separate ops UI).
+- Speaker note: reference the Gemini-generated diagram and highlight the pre-trained model reuse.
+- Visual: place the Gemini SVG diagram centered on the slide.
 
-Output format:
-- Provide a slide-by-slide outline.
-- For each slide, include:
-  - slide title
-  - 3-5 bullets
-  - speaker notes when useful
-  - visual suggestion when useful
+4) DB Schema
+- Bullets: (a) SQLite prediction store is the demo's source of truth; (b) core fields: id, rev_id, page_title, namespace, user, is_anon, comment, length_delta, timestamp, wiki, risk_score, risk_label, scored, created_at; (c) used by API and visualizer for fast retrieval.
+- Speaker note: note simple indexing for recent retrieval and filters by risk_label.
+- Visual: compact table showing the core fields (no raw data).
 
-Also include a short opening and closing script the presenter can read aloud.
+5) Implementation Details
+- Bullets: (a) Spark for batch feature engineering and model training (PipelineModel); (b) streaming scorer (Spark Structured Streaming or demo scorer) for low-latency scoring; (c) FastAPI serving layer with `/health`, `/stats`, `/edits`, `/explain`; (d) MLflow used for experiment tracking and explanation provenance.
+- Speaker note: mention language/runtime (Python, PySpark), and saved artifact locations (mlruns/, data/).
+- Visual: small flow diagram or code snippet callout (API call example).
 
-Do not add unnecessary technical jargon. Keep it sharp, credible, and presentation-ready.
+6) Visualization / Live Demo (must be live)
+- Bullets: (a) live dashboard reads from FastAPI and filters by risk; (b) explain endpoint produces LLM or rule-based explanations (logged to MLflow); (c) demo shows new edits appearing, scoring, and MLflow runs for explanations; (d) alerts visible via Slack/email integration.
+- Speaker note: instruct presenter to run the supervisor (collector + demo scorer) before demo and open MLflow UI and the dashboard.
+- Visual: screenshot placeholders + note: "Open MLflow UI and API console during demo." 
+
+7) Conclusion
+- Bullets: (a) summary of system capabilities; (b) lessons learned (streaming complexity, ML explainability trade-offs); (c) future work (scale Spark processor, add role-based alerts, improve human feedback loop).
+- Speaker note: one-line closing call-to-action.
+- Visual: 3 bullet takeaway icons.
+
+Opening script (2–3 lines):
+"Today I'll show WikiRisk — a lightweight, production-style system that detects and explains risky Wikipedia edits in real time. We'll walk datasets, architecture, and a live demo that connects streaming edits to ML provenance and explainability."
+
+Closing script (2–3 lines):
+"In summary: WikiRisk demonstrates how saved ML artifacts, streaming collection, and lightweight serving can provide practical, explainable triage for Wikipedia moderation. Next steps focus on scale and operational hardening. I'm happy to take questions."
+
+Deliverable format reminder: output a slide-by-slide outline exactly as specified (title, bullets, speaker notes, visual suggestion). Keep wording concise and slide-ready.
