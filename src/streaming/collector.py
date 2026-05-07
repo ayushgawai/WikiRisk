@@ -229,7 +229,7 @@ def run_collector(
 @click.command()
 @click.option("--wiki", default="enwiki", help="Target Wikipedia (e.g. enwiki)")
 @click.option("--limit", default=None, type=int, help="Stop after N events")
-@click.option("--flush-interval", default=10, help="Seconds between file flushes")
+@click.option("--flush-interval", default=5, help="Seconds between file flushes")
 def main(wiki: str, limit: int | None, flush_interval: int) -> None:
     """Collect live Wikipedia edits and write to data/stream/incoming/."""
     cfg = get_settings()

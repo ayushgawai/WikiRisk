@@ -323,7 +323,7 @@ def run_streaming_processor(
 @click.command()
 @click.option(
     "--trigger-interval",
-    default=30,
+    default=5,
     help="Spark micro-batch interval in seconds",
 )
 def main(trigger_interval: int) -> None:

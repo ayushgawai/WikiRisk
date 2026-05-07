@@ -419,13 +419,16 @@ def main() -> None:
 
     try:
         key = st.session_state["refresh_key"]
+        # Keep the risk filter authoritative; a stale search term can otherwise
+        # hide valid HIGH/MEDIUM results and make the demo look broken.
+        effective_search = search.strip() if risk_choice == "All" else ""
         health = load_health(key)
         stats = load_stats(key)
         edits = load_edits(
             page_size=page_size,
             risk_label=None if risk_choice == "All" else risk_choice,
             scored_only=scored_only,
-            search=search,
+            search=effective_search,
             refresh_key=key,
         )
     except requests.RequestException as exc:
@@ -438,6 +441,8 @@ def main() -> None:
 
     df = edits_to_frame(edits.get("items", []))
     st.subheader("Live Risk Feed")
+    if risk_choice != "All" and search.strip():
+        st.caption("Search is temporarily ignored while filtering by risk level so the demo stays readable.")
     render_charts(df)
 
     table_col, detail_col = st.columns([1.35, 1])

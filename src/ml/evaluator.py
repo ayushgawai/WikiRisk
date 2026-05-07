@@ -145,17 +145,21 @@ def load_production_model(cfg=None):
             log.warning("local_model_load_failed", path=str(local_path), error=str(exc))
 
     # ── 2. MLflow Model Registry ───────────────────────────────────────────
-    import mlflow.spark
-    mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
+    try:
+        import mlflow.spark
+    except Exception as exc:
+        log.warning("mlflow_unavailable_for_model_load", error=str(exc))
+    else:
+        mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
 
-    for stage in ("Production", "Staging", "None"):
-        model_uri = f"models:/{cfg.mlflow_model_name}/{stage}"
-        try:
-            model = mlflow.spark.load_model(model_uri)
-            log.info("model_loaded_mlflow", uri=model_uri, stage=stage)
-            return model
-        except Exception as exc:
-            log.debug("model_load_attempt_failed", stage=stage, error=str(exc))
+        for stage in ("Production", "Staging", "None"):
+            model_uri = f"models:/{cfg.mlflow_model_name}/{stage}"
+            try:
+                model = mlflow.spark.load_model(model_uri)
+                log.info("model_loaded_mlflow", uri=model_uri, stage=stage)
+                return model
+            except Exception as exc:
+                log.debug("model_load_attempt_failed", stage=stage, error=str(exc))
 
     raise RuntimeError(
         f"No trained model found locally ({local_path}) or in MLflow registry "
