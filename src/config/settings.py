@@ -91,8 +91,10 @@ class Settings(BaseSettings):
     log_format: str = "json"  # "json" | "pretty"
 
     # ── Risk Thresholds ────────────────────────────────────────────────────
-    risk_high_threshold: float = 0.68
-    risk_medium_threshold: float = 0.30
+    # Operational bands for the live feed.
+    # The model is conservative, so these cutoffs emphasize relative risk.
+    risk_high_threshold: float = 0.20
+    risk_medium_threshold: float = 0.08
 
     @field_validator("data_dir", "raw_data_dir", "processed_data_dir",
                      "predictions_dir", "stream_input_dir",

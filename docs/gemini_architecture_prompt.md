@@ -9,7 +9,7 @@ Style requirements:
   accents, dark gray text, subtle gold highlights
 - make it look like a serious university capstone / production demo diagram
 - include icons or visual cues for batch processing, streaming, API serving,
-  dashboard, and ML model tracking
+  SQLite storage, and ML model tracking
 - avoid clutter; keep the diagram readable on a slide
 - use a left-to-right flow with clear stage labels
 - make the diagram feel like a big-data platform rather than a simple toy app
@@ -38,7 +38,7 @@ Diagram content to include:
    - SQLite / local prediction store
    - Parquet / processed data archive
    - FastAPI backend
-   - health, stats, and recent edits endpoints
+   - health, stats, recent edits, and explain endpoints
 
 5. Output / demo impact block
    - moderation triage
@@ -65,4 +65,6 @@ Extra notes:
 - show that the model is already trained and reused for live scoring
 - emphasize that this is a production-style demo, not a toy notebook
 - include arrows that show data flowing from historical training to live inference
-- make the dashboard look like an operator console for Wikipedia risk monitoring
+- do not include a frontend/dashboard component; the current demo is backend-only
+- optionally show MLflow UI as a separate tracking/ops tool, not as part of the
+   serving path

@@ -13,7 +13,7 @@ RAW_DIR       := $(DATA_DIR)/raw/dumps
 PROCESSED_DIR := $(DATA_DIR)/processed
 
 .PHONY: help install setup up down logs clean train stream serve live test \
-        batch full-pipeline lint format check-data
+	batch full-pipeline lint format check-data mlflow
 
 # ── Help ─────────────────────────────────────────────────────────────────────
 help:
@@ -37,6 +37,7 @@ help:
 	@echo "  Dev:"
 	@echo "    make serve          Start FastAPI backend (dev mode)"
 	@echo "    make live           Start collector + streaming processor"
+	@echo "    make mlflow         Start local MLflow tracking server"
 	@echo "    make test           Run test suite"
 	@echo "    make lint           Run ruff linter"
 	@echo "    make format         Run ruff formatter"
@@ -91,6 +92,9 @@ serve:
 
 live:
 	$(PYTHON) scripts/run_live_stack.py
+
+mlflow:
+	$(PYTHON) scripts/run_mlflow_server.py
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 test:

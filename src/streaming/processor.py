@@ -93,6 +93,16 @@ def _upsert_predictions(conn: sqlite3.Connection, rows: list[dict]) -> None:
     conn.commit()
 
 
+def _write_delta_archive(scored_df, cfg) -> None:
+    """Append scored rows to a Delta Lake archive when Delta is available."""
+    delta_path = cfg.predictions_dir / "delta"
+    try:
+        scored_df.write.format("delta").mode("append").save(str(delta_path))
+        log.info("delta_archive_written", path=str(delta_path))
+    except Exception as exc:
+        log.warning("delta_archive_skipped", error=str(exc), path=str(delta_path))
+
+
 def _risk_label(score: float, cfg) -> str:
     if score >= cfg.risk_high_threshold:
         return "HIGH"
@@ -280,6 +290,7 @@ def run_streaming_processor(
             / datetime.now(tz=timezone.utc).strftime("date=%Y-%m-%d")
         )
         scored.write.mode("append").parquet(str(parquet_path))
+        _write_delta_archive(scored, cfg)
         log.info(
             "batch_processed",
             batch_id=batch_id,

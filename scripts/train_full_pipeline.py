@@ -479,6 +479,9 @@ def re_score_existing_edits(model, model_path: str) -> None:
         return
 
     db_path = str(ROOT / "data" / "wikirisk.db")
+    from src.config import get_settings
+
+    cfg = get_settings()
     conn = sqlite3.connect(db_path)
     rows = conn.execute(
         "SELECT id, comment, page_title, length_delta, is_anon, timestamp FROM predictions"
@@ -538,7 +541,11 @@ def re_score_existing_edits(model, model_path: str) -> None:
     updates = []
     for _, row in results.iterrows():
         score = float(row["risk_score"])
-        label = "HIGH" if score >= 0.68 else ("MEDIUM" if score >= 0.30 else "LOW")
+        label = (
+            "HIGH"
+            if score >= cfg.risk_high_threshold
+            else ("MEDIUM" if score >= cfg.risk_medium_threshold else "LOW")
+        )
         updates.append((score, label, row["id"]))
 
     conn.executemany(

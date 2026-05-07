@@ -16,11 +16,11 @@ Use the following presentation sequence exactly:
 
 Important constraints:
 - The project is already trained and running locally. Do **not** describe retraining as part of the demo.
-- Emphasize that the system uses the saved model, streaming pipeline, and dashboard that are already built.
+- Emphasize that the system uses the saved model, streaming pipeline, API, and SQLite prediction store that are already built.
 - The deck should feel like a real production big-data demo, not a toy notebook.
 - Make it visually clean, modern, and easy to present aloud.
 - Include concise speaker-friendly bullets, not long paragraphs.
-- The live demo should focus on the API, streaming output, and saved prediction store.
+- The live demo should focus on the API, streaming output, MLflow tracking, and saved prediction store.
 - The architecture slide should incorporate the Gemini-generated architecture diagram.
 
 What the deck should communicate:
@@ -29,7 +29,7 @@ What the deck should communicate:
 - A SparkML classifier scores edit risk using saved artifacts and MLflow-tracked training results.
 - Spark Structured Streaming handles incoming recent-change events.
 - FastAPI serves health, stats, and recent-edit data.
-- The serving layer exposes health, stats, and recent-edit endpoints for the demo.
+- The serving layer exposes health, stats, recent-edit, and explain endpoints for the demo.
 - The database stores predictions and live records for fast retrieval.
 
 DB schema guidance:
@@ -39,8 +39,9 @@ DB schema guidance:
 
 Visualization / live demo guidance:
 - Show the actual backend workflow end to end.
-- Demonstrate the API responses, the SQLite prediction store, and the streaming processor.
+- Demonstrate the API responses, the SQLite prediction store, the streaming processor, and MLflow runs/artifacts.
 - Mention that the demo is based on the already-trained model and saved artifacts.
+- Do not describe a frontend app; the demo is backend-first.
 
 Style guidance:
 - Use a professional academic / startup-demo tone.

@@ -83,30 +83,55 @@ async def generate_explanation(edit: dict) -> dict:
         client = AsyncOpenAI(api_key=cfg.openai_api_key)
         prompt = _build_prompt(edit)
 
-        response = await client.chat.completions.create(
-            model=cfg.openai_model,
-            messages=[
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=cfg.openai_max_tokens,
-            temperature=0.3,
-        )
+        # Try configured model first, then fall back to a safer widely-available model.
+        candidates = [cfg.openai_model, "gpt-3.5-turbo"]
+        last_exc = None
+        for m in candidates:
+            if not m:
+                continue
+            try:
+                response = await client.chat.completions.create(
+                    model=m,
+                    messages=[
+                        {"role": "system", "content": _SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=cfg.openai_max_tokens,
+                    temperature=0.3,
+                )
 
-        text = response.choices[0].message.content.strip()
-        model_used = response.model
-        log.info(
-            "explanation_generated",
+                text = response.choices[0].message.content.strip()
+                model_used = getattr(response, "model", m)
+                tokens = getattr(getattr(response, "usage", None), "total_tokens", None)
+                log.info(
+                    "explanation_generated",
+                    edit_id=edit.get("id"),
+                    model=model_used,
+                    tokens=tokens,
+                )
+                return {
+                    "explanation": text,
+                    "model": model_used,
+                    "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+                }
+
+            except Exception as exc:
+                # Capture and try next model; log details for debugging.
+                last_exc = exc
+                log.warning(
+                    "openai_attempt_failed",
+                    model=m,
+                    error=str(exc),
+                    edit_id=edit.get("id"),
+                )
+
+        # If we exit the loop, all model attempts failed — log final error
+        log.warning(
+            "openai_all_models_failed",
+            error=str(last_exc),
             edit_id=edit.get("id"),
-            model=model_used,
-            tokens=response.usage.total_tokens if response.usage else None,
         )
-
-        return {
-            "explanation": text,
-            "model": model_used,
-            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
-        }
+        return _rule_based_explanation(edit)
 
     except Exception as exc:
         log.warning(
