@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS explanations (
     model         TEXT,
     generated_at  TEXT
 );
+
 """
 
 
