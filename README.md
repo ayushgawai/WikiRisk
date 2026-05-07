@@ -1,21 +1,16 @@
 # WikiRisk — Real-Time Wikipedia Edit Risk & Knowledge Integrity System
 
-> **DATA 228 (SP26) Group Project** · End-to-End Big Data Pipeline  
-> SparkML · MLflow · Spark Structured Streaming · FastAPI · Streamlit · OpenAI
+> **DATA 228 (SP26) Open-Source Demo Project** · End-to-End Big Data Pipeline  
+> SparkML · MLflow · Spark Structured Streaming · FastAPI · OpenAI
 
----
+WikiRisk is an open-source systems demo for real-time Wikipedia edit risk
+detection. It combines distributed batch processing, a SparkML model, live
+streaming inference, and a FastAPI serving layer into one reproducible stack.
 
-## Overview
-
-WikiRisk is a production-grade big data system that ingests ≥ 10 GB of
-English Wikipedia revision history, trains a distributed SparkML classifier
-to score "edit risk" (probability that an edit is vandalism or will be reverted),
-and deploys real-time scoring via Spark Structured Streaming connected to
-[Wikimedia EventStreams](https://stream.wikimedia.org/v2/stream/recentchange).
-
-A FastAPI backend exposes REST endpoints; a Streamlit dashboard lets users
-monitor and investigate risky edits in real time, with AI-generated explanations
-powered by OpenAI GPT-4o-mini.
+The project is intentionally built to showcase the full data engineering and ML
+lifecycle: large historical Wikipedia dumps are parsed and featurized, a model
+is trained and tracked with MLflow, and live Wikimedia edits are scored as they
+arrive through the streaming backend.
 
 ---
 
@@ -47,9 +42,9 @@ Wikimedia EventStreams (SSE)                        │
                ▼                             ▼
         SQLite DB                   Parquet Archive
                │
-        FastAPI Backend  ──►  /edits/recent, /explain/{id}
-               │
-        Streamlit Dashboard  +  OpenAI Explainer
+       FastAPI Backend  ──►  /health, /stats, /edits/recent, /explain/{id}
+             │
+       OpenAI Explainer
 ```
 
 ---
@@ -79,9 +74,9 @@ make train            # trains model + logs to MLflow
 
 # Start services (3 terminals)
 make serve            # FastAPI on :8000
-make ui               # Streamlit on :8501
 make collect          # SSE collector (populates DB with live edits)
 make stream           # Spark Structured Streaming processor
+make live             # collector + processor together
 ```
 
 ### 2. Full Docker stack
@@ -96,7 +91,7 @@ make up               # builds + starts all services
 #   MinIO console    →  http://localhost:9001
 #   MLflow UI        →  http://localhost:5001
 #   API docs         →  http://localhost:8000/docs
-#   Dashboard        →  http://localhost:8501
+#   Streaming logs   →  see terminal output from collector / processor
 ```
 
 ---
@@ -140,6 +135,21 @@ full details.
 - **Weak labels**: Heuristic rules on comment content, size delta, anonymity
 - **Tracked**: AUC, PR-AUC, F1, Precision, Recall, Confusion Matrix
 
+### Current Model Performance
+
+The latest locally trained model is already saved and serving in the demo stack.
+
+| Metric | Value |
+|---|---|
+| AUC-ROC | 0.7620 |
+| AUC-PR | 0.2710 |
+| F1 | 0.8483 |
+| Precision | 0.8461 |
+| Recall | 0.8961 |
+| Training time | 7,157 s |
+
+Training data used: 11.16M rows, 10.4% positive class.
+
 ### Reproducibility
 
 ```bash
@@ -169,6 +179,22 @@ MLflow UI: http://localhost:5001
 | `/explain` | POST | AI explanation (body: `{"edit_id": "..."}`) |
 
 Full interactive docs: http://localhost:8000/docs
+
+## Live Ingestion
+
+The backend demo is centered on the prediction store and streaming pipeline.
+It includes:
+
+- live edit ingestion from Wikimedia EventStreams
+- Spark Structured Streaming scoring into SQLite and Parquet
+- health and stats endpoints for the current service state
+- AI explanation endpoints for human-readable context
+
+Launch locally with:
+
+```bash
+make live
+```
 
 ---
 
@@ -244,6 +270,21 @@ make test-fast        # skip slow (Spark) tests
 
 See GitHub Issues and Pull Requests for collaboration history.
 
+## Demo Narrative
+
+This repository is aligned with the original project proposal and professor
+feedback in the parts that matter most for a live demo:
+
+- large-scale batch processing over historical Wikipedia revision data
+- Spark Structured Streaming for incoming recent changes
+- ML model training, evaluation, and production-style persistence
+- FastAPI endpoints for health, stats, and edit lookups
+- a polished dashboard for showing the live system end to end
+- natural-language style explanations for non-technical interpretation
+
+We intentionally reuse the trained model and saved artifacts instead of
+retraining for the demo, so the stack stays stable and reproducible.
+
 ---
 
 ## Course Requirement Checklist
@@ -258,6 +299,13 @@ See GitHub Issues and Pull Requests for collaboration history.
 - [x] Docker + docker-compose (containerised stack)
 - [x] Structured logging (structlog JSON)
 - [x] Reproducibility (re-train via `make full-pipeline`)
+
+## Open Source Notes
+
+WikiRisk is presented as an open-source educational project. The codebase,
+manifests, and saved artifacts are structured so another developer can inspect
+the pipeline, run the services locally, and reproduce the demo without needing
+to retrain the model.
 - [x] Dataset + model manifests
 
 ---

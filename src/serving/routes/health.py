@@ -24,7 +24,7 @@ async def health() -> HealthResponse:
 
     services: dict[str, str] = {}
 
-    # Check MLflow
+    # Check MLflow, but treat it as optional for the demo UI.
     from src.config import get_settings
     cfg = get_settings()
     try:
@@ -32,7 +32,7 @@ async def health() -> HealthResponse:
             r = await client.get(f"{cfg.mlflow_tracking_uri}/health")
             services["mlflow"] = "ok" if r.status_code == 200 else "degraded"
     except Exception:
-        services["mlflow"] = "unavailable"
+        services["mlflow"] = "optional"
 
     services["api"] = "ok"
     services["database"] = "ok"

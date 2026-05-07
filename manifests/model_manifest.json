@@ -1,21 +1,26 @@
 {
-  "run_id": "placeholder_run_id",
+  "run_id": "b71e29813003465ab4e6bba882358f8d",
   "model_name": "wikirisk-risk-classifier",
-  "trained_at": "2024-04-20T00:00:00+00:00",
-  "mlflow_tracking_uri": "http://localhost:5001",
-  "note": "This file is updated automatically after each training run (make train)",
+  "model_local_path": "/Users/spartan/Documents/GitHub/WikiRisk/data/model/wikirisk_lr_model",
+  "trained_at": "2026-05-07T02:35:31.920972+00:00",
+  "data_source": "mediawiki_history",
+  "label_field": "revision_is_identity_reverted",
+  "files_used": [
+    "2026-03.enwiki.2022-01.tsv.bz2",
+    "2026-03.enwiki.2023-01.tsv.bz2",
+    "2026-03.enwiki.2024-01.tsv.bz2"
+  ],
   "metrics": {
-    "auc": 0.0,
-    "pr_auc": 0.0,
-    "f1": 0.0,
-    "precision": 0.0,
-    "recall": 0.0,
-    "accuracy": 0.0
+    "auc_roc": 0.762,
+    "auc_pr": 0.271,
+    "f1": 0.8483,
+    "precision": 0.8461,
+    "recall": 0.8961,
+    "training_time_seconds": 7157.1
   },
   "training_data_stats": {
-    "total": 0,
-    "positive": 0,
-    "negative": 0,
-    "positive_rate": 0.0
+    "total": 11161486,
+    "positive": 1160292,
+    "positive_rate": 0.104
   }
 }

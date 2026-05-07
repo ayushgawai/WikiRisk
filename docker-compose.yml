@@ -2,7 +2,7 @@ version: "3.9"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WikiRisk – Production docker-compose
-# Services: MinIO  →  MLflow  →  API (FastAPI)  →  UI (Streamlit)
+# Services: MinIO  →  MLflow  →  API (FastAPI)  →  collector / streaming
 # Spark runs in local[*] mode inside the api container (no external cluster)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -133,24 +133,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
-    restart: unless-stopped
-
-  # ── Streamlit Dashboard ──────────────────────────────────────────────────
-  ui:
-    build:
-      context: .
-      dockerfile: docker/ui.Dockerfile
-    container_name: wikirisk-ui
-    depends_on:
-      api:
-        condition: service_healthy
-    environment:
-      <<: *common-env
-      API_URL: http://api:8000
-    ports:
-      - "8501:8501"
-    networks:
-      - wikirisk
     restart: unless-stopped
 
   # ── Stream Collector (SSE → file sink) ───────────────────────────────────

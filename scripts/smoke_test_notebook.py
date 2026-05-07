@@ -62,30 +62,35 @@ def check(label, fn):
 # ── 1. Generate synthetic sample bz2 TSV ──────────────────────────────────────
 
 MW_HEADER = [
-    "wiki_db","event_entity","event_type","event_timestamp",
-    "event_comment","event_user_id","event_user_text_historical",
-    "event_user_text","event_user_blocks_historical","event_user_blocks",
+    # 76-column mediawiki_history schema (matches the real dumps)
+    "wiki_db","event_entity","event_type","event_timestamp","event_comment",
+    "event_user_id","event_user_central_id","event_user_text_historical","event_user_text",
+    "event_user_blocks_historical","event_user_blocks",
     "event_user_groups_historical","event_user_groups",
     "event_user_is_bot_by_historical","event_user_is_bot_by",
-    "event_user_is_created_by_self","event_user_is_created_by_system",
-    "event_user_is_created_by_peer","event_user_is_anonymous",
-    "event_user_registration_timestamp","event_user_creation_timestamp",
-    "event_user_first_edit_timestamp","event_user_revision_count",
-    "event_user_seconds_since_previous_revision",
+    "event_user_is_created_by_self","event_user_is_created_by_system","event_user_is_created_by_peer",
+    "event_user_is_anonymous","event_user_is_temporary","event_user_is_permanent",
+    "event_user_registration_timestamp","event_user_creation_timestamp","event_user_first_edit_timestamp",
+    "event_user_revision_count","event_user_seconds_since_previous_revision",
     "page_id","page_title_historical","page_title",
-    "page_namespace_historical","page_namespace",
-    "page_namespace_is_content_historical","page_namespace_is_content",
-    "page_is_redirect_historical","page_is_redirect",
-    "page_is_deleted","page_creation_timestamp",
-    "page_first_edit_timestamp","page_revision_count",
-    "page_seconds_since_previous_revision",
+    "page_namespace_historical","page_namespace_is_content_historical",
+    "page_namespace","page_namespace_is_content",
+    "page_is_redirect","page_is_deleted",
+    "page_creation_timestamp","page_first_edit_timestamp",
+    "page_revision_count","page_seconds_since_previous_revision",
+    "user_id","user_central_id","user_text_historical","user_text",
+    "user_blocks_historical","user_blocks",
+    "user_groups_historical","user_groups",
+    "user_is_bot_by_historical","user_is_bot_by",
+    "user_is_created_by_self","user_is_created_by_system","user_is_created_by_peer",
+    "user_is_anonymous","user_is_temporary","user_is_permanent",
+    "user_registration_timestamp","user_creation_timestamp","user_first_edit_timestamp",
     "revision_id","revision_parent_id","revision_minor_edit",
     "revision_deleted_parts","revision_deleted_parts_are_suppressed",
-    "revision_text_bytes","revision_text_bytes_diff",
-    "revision_text_sha1","revision_content_model",
-    "revision_content_format","revision_is_deleted_by_page_deletion",
-    "revision_deleted_timestamp","revision_is_identity_reverted",
-    "revision_first_identity_reverting_revision_id",
+    "revision_text_bytes","revision_text_bytes_diff","revision_text_sha1",
+    "revision_content_model","revision_content_format",
+    "revision_is_deleted_by_page_deletion","revision_deleted_by_page_deletion_timestamp",
+    "revision_is_identity_reverted","revision_first_identity_reverting_revision_id",
     "revision_seconds_to_identity_revert","revision_is_identity_revert",
     "revision_is_from_before_page_creation","revision_tags",
 ]
@@ -99,42 +104,52 @@ def make_row(i):
     ts         = f"2023-06-{1+(i%28):02d} {hour:02d}:30:00.0"
     titles     = ["Python_(programming)","Machine_learning","Wikipedia","Neural_network","Vandalism"]
     comments   = ["/* section */ fixed typo","Reverted edits by user","Added citation","rv vandalism","Updated content"]
-    row_vals = {
-        "wiki_db": "enwiki", "event_entity": "revision", "event_type": "create",
+
+    # Start with all-empty fields, then fill the ones we care about.
+    row_vals = {k: "" for k in MW_HEADER}
+    row_vals.update({
+        "wiki_db": "enwiki",
+        "event_entity": "revision",
+        "event_type": "create",
         "event_timestamp": ts,
         "event_comment": comments[i % len(comments)],
+
         "event_user_id": str(1000 + i),
+        "event_user_central_id": str(5000 + i),
         "event_user_text_historical": f"User{i}",
         "event_user_text": f"User{i}",
-        "event_user_blocks_historical": "",
-        "event_user_blocks": "",
         "event_user_groups_historical": "extendedconfirmed",
         "event_user_groups": "extendedconfirmed",
-        "event_user_is_bot_by_historical": "false",
-        "event_user_is_bot_by": "false",
+        "event_user_is_bot_by_historical": "",
+        "event_user_is_bot_by": "",
         "event_user_is_created_by_self": "true",
         "event_user_is_created_by_system": "false",
         "event_user_is_created_by_peer": "false",
         "event_user_is_anonymous": is_anon,
+        "event_user_is_temporary": "false",
+        "event_user_is_permanent": "true" if is_anon == "false" else "false",
         "event_user_registration_timestamp": "2020-01-01 00:00:00.0",
         "event_user_creation_timestamp": "2020-01-01 00:00:00.0",
         "event_user_first_edit_timestamp": "2020-01-02 00:00:00.0",
         "event_user_revision_count": str(10 + i),
         "event_user_seconds_since_previous_revision": "3600",
+
         "page_id": str(100 + (i % 50)),
         "page_title_historical": titles[i % len(titles)],
         "page_title": titles[i % len(titles)],
         "page_namespace_historical": "0",
-        "page_namespace": "0",
         "page_namespace_is_content_historical": "true",
+        "page_namespace": "0",
         "page_namespace_is_content": "true",
-        "page_is_redirect_historical": "false",
         "page_is_redirect": "false",
         "page_is_deleted": "false",
         "page_creation_timestamp": "2010-01-01 00:00:00.0",
         "page_first_edit_timestamp": "2010-01-01 00:00:00.0",
         "page_revision_count": str(500 + i),
         "page_seconds_since_previous_revision": "7200",
+
+        # user_* (entity user) fields left blank for revision events
+
         "revision_id": str(900000000 + i),
         "revision_parent_id": str(900000000 + i - 1),
         "revision_minor_edit": "false",
@@ -146,14 +161,14 @@ def make_row(i):
         "revision_content_model": "wikitext",
         "revision_content_format": "text/x-wiki",
         "revision_is_deleted_by_page_deletion": "false",
-        "revision_deleted_timestamp": "",
+        "revision_deleted_by_page_deletion_timestamp": "",
         "revision_is_identity_reverted": reverted,
         "revision_first_identity_reverting_revision_id": str(900000000 + i + 1) if reverted == "true" else "",
         "revision_seconds_to_identity_revert": "120" if reverted == "true" else "",
         "revision_is_identity_revert": "false",
         "revision_is_from_before_page_creation": "false",
         "revision_tags": "",
-    }
+    })
     return "\t".join(row_vals[c] for c in MW_HEADER)
 
 def _bz2_line_count(path: Path) -> int:

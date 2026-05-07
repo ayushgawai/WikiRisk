@@ -3,21 +3,27 @@
 *.pem
 *.key
 
-# ── Data (large files – track manifests and model, not raw dumps) ─────────────
+# ── Data and generated artifacts ─────────────────────────────────────────────
 data/raw/dumps/
 data/raw/mediawiki_history/*.bz2
-!data/raw/mediawiki_history/_smoke_sample.tsv.bz2
+data/raw/mediawiki_history/_debug*.tsv
+data/raw/mediawiki_history/label_stats*.json
+data/raw/mediawiki_history/sizes*.json
 data/spark-local/
 data/processed/
 data/stream/
 data/predictions/
 data/wikirisk.db
+data/model/
+mlruns/
+logs/
+docs/*.png
+manifests/model_manifest_smoke.json
+notebooks/mlruns/
+notebooks/*_executed.ipynb
 *.db
 *.db-shm
 *.db-wal
-
-# mlruns/ and data/model/ are intentionally tracked:
-# they contain training proof and the trained model for sharing.
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/

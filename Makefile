@@ -12,7 +12,7 @@ DATA_DIR      := data
 RAW_DIR       := $(DATA_DIR)/raw/dumps
 PROCESSED_DIR := $(DATA_DIR)/processed
 
-.PHONY: help install setup up down logs clean train stream serve ui test \
+.PHONY: help install setup up down logs clean train stream serve live test \
         batch full-pipeline lint format check-data
 
 # ── Help ─────────────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ help:
 	@echo ""
 	@echo "  Dev:"
 	@echo "    make serve          Start FastAPI backend (dev mode)"
-	@echo "    make ui             Start Streamlit dashboard"
+	@echo "    make live           Start collector + streaming processor"
 	@echo "    make test           Run test suite"
 	@echo "    make lint           Run ruff linter"
 	@echo "    make format         Run ruff formatter"
@@ -89,11 +89,8 @@ full-pipeline: batch train
 serve:
 	uvicorn src.serving.main:app --host 0.0.0.0 --port 8000 --reload --log-level info
 
-ui:
-	streamlit run src/ui/app.py \
-		--server.port 8501 \
-		--server.address 0.0.0.0 \
-		--theme.base light
+live:
+	$(PYTHON) scripts/run_live_stack.py
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 test:
